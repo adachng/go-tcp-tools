@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/adachng/go-tcp-tools/hello"
+	"github.com/adachng/go-tcp-tools/internal/hello"
 )
 
 func main() {
