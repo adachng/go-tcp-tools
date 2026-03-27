@@ -11,11 +11,11 @@ func init() { // https://go.dev/doc/effective_go#init
 	loggerSingleton.Store(log.Default())
 }
 
-func GetInstance() *log.Logger {
+func Get() *log.Logger {
 	return loggerSingleton.Load()
 }
 
-func SetInstance(instance *log.Logger) {
+func Set(instance *log.Logger) {
 	if instance == nil {
 		loggerSingleton.Store(log.Default())
 	} else {
