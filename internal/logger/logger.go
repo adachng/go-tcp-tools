@@ -415,7 +415,7 @@ func (l *Logger) Panic(v ...any) {
 
 	msg := fmt.Sprint(v...)
 	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
-	singleton.Panic(str)
+	l.u.Panic(str)
 }
 
 // Log fatal message with usage equivalent to Printf().
@@ -433,7 +433,7 @@ func (l *Logger) Panicf(format string, v ...any) {
 
 	msg := fmt.Sprintf(format, v...)
 	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
-	singleton.Panic(str)
+	l.u.Panic(str)
 }
 
 // Log fatal message with usage equivalent to Print().
@@ -451,7 +451,7 @@ func (l *Logger) Fatal(v ...any) {
 
 	msg := fmt.Sprint(v...)
 	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
-	singleton.Fatal(str)
+	l.u.Fatal(str)
 }
 
 // Log fatal message with usage equivalent to Printf().
@@ -469,5 +469,5 @@ func (l *Logger) Fatalf(format string, v ...any) {
 
 	msg := fmt.Sprintf(format, v...)
 	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
-	singleton.Fatal(str)
+	l.u.Fatal(str)
 }
