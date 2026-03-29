@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 
 type LogLevel int
@@ -112,6 +113,17 @@ var singleton *Logger = &Logger{
 		IsPreferShortName: true,
 	},
 	u: log.Default(),
+}
+
+func init() { // https://go.dev/doc/effective_go#init
+	singleton.u.SetFlags(log.LstdFlags | log.Lmicroseconds)
+}
+
+func New(underlying *log.Logger, c Config) *Logger {
+	return &Logger{
+		u: underlying,
+		c: c,
+	}
 }
 
 // Returns the singleton instance in this package.
@@ -470,4 +482,11 @@ func (l *Logger) Fatalf(format string, v ...any) {
 	msg := fmt.Sprintf(format, v...)
 	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
 	l.u.Fatal(str)
+}
+
+// Logs the current system time as reference point.
+func (l *Logger) LogTime() {
+	now := time.Now()
+	str := now.Format("2006 Jan 02 15:04:05 GMT-07:00")
+	l.Info(str)
 }
