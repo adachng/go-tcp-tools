@@ -73,8 +73,6 @@ var logLevelShortName = map[LogLevel]string{
 // This should only be used by client code external to this package.
 // Internal code reads concurrent-safe flag to determine
 // whether to log with short form (e.g. "T3") or long form (e.g. "TRACEL3").
-//
-// See https://pkg.go.dev/fmt#Stringer for more details.
 func (l *LogLevel) String() string {
 	// Note that map keys are not automatically dereferenced.
 	return logLevelName[*l]
@@ -126,6 +124,7 @@ func init() { // https://go.dev/doc/effective_go#init
 	singleton.u.SetFlags(log.LstdFlags | log.Lmicroseconds)
 }
 
+// Returns a new [Logger].
 func New(underlying *log.Logger, c Config) *Logger {
 	return &Logger{
 		u: underlying,
@@ -138,7 +137,8 @@ func Default() *Logger {
 	return singleton
 }
 
-// Configure the additional settings of the logger.
+// Configure the additional settings of the [Logger]
+// asides from the pre-existing [log.Logger] settings.
 func (l *Logger) Configure(c Config) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -146,10 +146,11 @@ func (l *Logger) Configure(c Config) {
 	l.c = c
 }
 
-// Sets the current log LogLevel.
-// Mutes log entries lower than current LogLevel.
+// Sets the current [Logger] instance's [LogLevel]. Mutes log entries lower than current [LogLevel].
 //
-// Differs from Configure() for convenience to not modify other settings.
+// For example, doing [Logger.SetLogLevel]([LevelTraceL2]) will mute all messages with [LogLevel] at [LevelTraceL3] and below (if applicable).
+//
+// Differs from [Logger.Configure] for convenience to not modify other settings.
 func (l *Logger) SetLogLevel(level LogLevel) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -157,6 +158,7 @@ func (l *Logger) SetLogLevel(level LogLevel) {
 	l.c.LogLevel = level
 }
 
+// Gets the underlying [Logger]'s [log.Logger].
 func (l *Logger) GetUnderlying() *log.Logger {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -164,7 +166,11 @@ func (l *Logger) GetUnderlying() *log.Logger {
 	return l.u
 }
 
-// Sets the underlying log.Logger.
+// Sets the underlying [log.Logger].
+//
+// Additionally. it handles the flags [log.Llongfile]
+// and [log.Lshortfile] because the call depth in
+// the original [log] functions have the wrong value.
 func (l *Logger) SetUnderlying(underlying *log.Logger) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -234,7 +240,7 @@ func (l *Logger) getLogMsg(levelStr, msg string) string {
 	return ret
 }
 
-// Get the log LogLevel string depending on the configured flag for preferring short form.
+// Get the string form of [LogLevel] depending on the configured flag for preferring short form.
 //
 // This internal function assumes internal caller has already locked the mutex.
 func (l *Logger) getLevelStr(LogLevel LogLevel) string {
@@ -245,7 +251,7 @@ func (l *Logger) getLevelStr(LogLevel LogLevel) string {
 	}
 }
 
-// Log trace LogLevel 3 message with usage equivalent to Print().
+// Log trace level 3 (highest verbosity) message; usage equivalent to [log.Logger.Print].
 func (l *Logger) TraceL3(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -261,7 +267,7 @@ func (l *Logger) TraceL3(v ...any) {
 	l.u.Print(str)
 }
 
-// Log trace LogLevel 3 message with usage equivalent to Printf().
+// Log trace level 3 (highest verbosity) message; usage equivalent to [log.Logger.Printf].
 func (l *Logger) TraceL3f(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -277,7 +283,7 @@ func (l *Logger) TraceL3f(format string, v ...any) {
 	l.u.Print(str)
 }
 
-// Log trace LogLevel 2 message with usage equivalent to Print().
+// Log trace level 2 message; usage equivalent to [log.Logger.Print].
 func (l *Logger) TraceL2(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -293,7 +299,7 @@ func (l *Logger) TraceL2(v ...any) {
 	l.u.Print(str)
 }
 
-// Log trace LogLevel 2 message with usage equivalent to Printf().
+// Log trace level 2 message; usage equivalent to [log.Logger.Printf].
 func (l *Logger) TraceL2f(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -309,7 +315,7 @@ func (l *Logger) TraceL2f(format string, v ...any) {
 	l.u.Print(str)
 }
 
-// Log trace LogLevel 1 message with usage equivalent to Print().
+// Log trace level 1 message; usage equivalent to [log.Logger.Print].
 func (l *Logger) TraceL1(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -325,7 +331,7 @@ func (l *Logger) TraceL1(v ...any) {
 	l.u.Print(str)
 }
 
-// Log trace LogLevel 1 message with usage equivalent to Printf().
+// Log trace level 2 message; usage equivalent to [log.Logger.Printf].
 func (l *Logger) TraceL1f(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -341,7 +347,7 @@ func (l *Logger) TraceL1f(format string, v ...any) {
 	l.u.Print(str)
 }
 
-// Log debug message with usage equivalent to Print().
+// Log debug message; usage equivalent to [log.Logger.Print].
 func (l *Logger) Debug(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -357,7 +363,7 @@ func (l *Logger) Debug(v ...any) {
 	l.u.Print(str)
 }
 
-// Log debug message with usage equivalent to Printf().
+// Log debug message; usage equivalent to [log.Logger.Print].
 func (l *Logger) Debugf(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -373,7 +379,7 @@ func (l *Logger) Debugf(format string, v ...any) {
 	l.u.Print(str)
 }
 
-// Log info message with usage equivalent to Print().
+// Log info message; usage equivalent to [log.Logger.Print].
 func (l *Logger) Info(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -389,7 +395,7 @@ func (l *Logger) Info(v ...any) {
 	l.u.Print(str)
 }
 
-// Log info message with usage equivalent to Printf().
+// Log info message; usage equivalent to [log.Logger.Printf].
 func (l *Logger) Infof(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -405,7 +411,7 @@ func (l *Logger) Infof(format string, v ...any) {
 	l.u.Print(str)
 }
 
-// Log notice message with usage equivalent to Print().
+// Log notice message; usage equivalent to [log.Logger.Print].
 func (l *Logger) Notice(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -421,7 +427,7 @@ func (l *Logger) Notice(v ...any) {
 	l.u.Print(str)
 }
 
-// Log notice message with usage equivalent to Printf().
+// Log notice message; usage equivalent to [log.Logger.Printf].
 func (l *Logger) Noticef(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -437,7 +443,7 @@ func (l *Logger) Noticef(format string, v ...any) {
 	l.u.Print(str)
 }
 
-// Log error message with usage equivalent to Print().
+// Log error message; usage equivalent to [log.Logger.Print].
 func (l *Logger) Error(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -453,7 +459,7 @@ func (l *Logger) Error(v ...any) {
 	l.u.Print(str)
 }
 
-// Log error message with usage equivalent to Printf().
+// Log error message; usage equivalent to [log.Logger.Printf].
 func (l *Logger) Errorf(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -469,9 +475,7 @@ func (l *Logger) Errorf(format string, v ...any) {
 	l.u.Print(str)
 }
 
-// Log panic message with usage equivalent to Print().
-//
-// Beware that this function involves calling panic() for its message.
+// Log panic message; usage equivalent to [log.Logger.Panic].
 func (l *Logger) Panic(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -487,9 +491,7 @@ func (l *Logger) Panic(v ...any) {
 	l.u.Panic(str)
 }
 
-// Log fatal message with usage equivalent to Printf().
-//
-// Beware that this function involves calling panic() for its message.
+// Log fatal message; usage equivalent to [log.Logger.Panicf].
 func (l *Logger) Panicf(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -505,9 +507,7 @@ func (l *Logger) Panicf(format string, v ...any) {
 	l.u.Panic(str)
 }
 
-// Log fatal message with usage equivalent to Print().
-//
-// Beware that this function involves calling os.Exit(1) for its message.
+// Log fatal message; usage equivalent to [log.Logger.Fatal].
 func (l *Logger) Fatal(v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -523,9 +523,7 @@ func (l *Logger) Fatal(v ...any) {
 	l.u.Fatal(str)
 }
 
-// Log fatal message with usage equivalent to Printf().
-//
-// Beware that this function involves calling os.Exit(1) for its message.
+// Log fatal message; usage equivalent to [log.Logger.Fatalf].
 func (l *Logger) Fatalf(format string, v ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
