@@ -20,6 +20,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+// Package [logx] implements standardised logging on top of standard package [log]
+// which includes additional configurations such as log levels and enclosing strings
+// for easy searching.
 package logx
 
 import (
