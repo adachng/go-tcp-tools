@@ -108,28 +108,32 @@ type Logger struct {
 }
 
 // Singleton instance of Logger for convenience.
-var singleton *Logger = &Logger{
-	c: Config{
+var singleton *Logger = nil
+
+func init() { // https://go.dev/doc/effective_go#init
+	u := log.Default()
+	u.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+
+	c := Config{
 		LogLevelPrefix:     "{",
 		LogLevelSuffix:     "}",
 		FileNamePrefix:     "|",
 		FileNameSuffix:     "|",
 		LogLevel:           LevelDebug,
 		IsPreferShortLevel: true,
-	},
-	u: log.Default(),
-}
+	}
 
-func init() { // https://go.dev/doc/effective_go#init
-	singleton.u.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	singleton = New(u, c)
 }
 
 // Returns a new [Logger].
-func New(underlying *log.Logger, c Config) *Logger {
-	return &Logger{
-		u: underlying,
-		c: c,
-	}
+func New(u *log.Logger, c Config) *Logger {
+	ret := new(Logger)
+
+	ret.Configure(c)
+	ret.SetUnderlying(u)
+
+	return ret
 }
 
 // Returns the singleton instance in this package.
