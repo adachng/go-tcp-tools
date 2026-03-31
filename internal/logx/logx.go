@@ -25,6 +25,7 @@ package logx
 import (
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -90,10 +91,14 @@ func (l *LogLevel) String() string {
 type Config struct {
 	LogLevelPrefix string
 	LogLevelSuffix string
+	FileNamePrefix string
+	FileNameSuffix string
 
 	LogLevel LogLevel
 
-	IsPreferShortName bool
+	IsPreferShortLevel bool
+	IsLoggingLongFile  bool // logs long file name (only when IsLoggingShortFile is false)
+	IsLoggingShortFile bool // overrides IsLoggingFile if true
 }
 
 // Concurrency-safe extended logger struct.
@@ -107,10 +112,12 @@ type Logger struct {
 // Singleton instance of Logger for convenience.
 var singleton *Logger = &Logger{
 	c: Config{
-		LogLevelPrefix:    "{",
-		LogLevelSuffix:    "}",
-		LogLevel:          LevelDebug,
-		IsPreferShortName: true,
+		LogLevelPrefix:     "{",
+		LogLevelSuffix:     "}",
+		FileNamePrefix:     "|",
+		FileNameSuffix:     "|",
+		LogLevel:           LevelDebug,
+		IsPreferShortLevel: true,
 	},
 	u: log.Default(),
 }
@@ -162,40 +169,76 @@ func (l *Logger) SetUnderlying(underlying *log.Logger) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// Translate the file name flags to this package's version because the call depth needs adjustment.
+	handleFileNameConfig := func() {
+		f := l.u.Flags()
+
+		l.c.IsLoggingLongFile = f&log.Llongfile > 0
+		l.c.IsLoggingShortFile = f&log.Lshortfile > 0
+
+		l.u.SetFlags(f & ^(log.Llongfile | log.Lshortfile))
+	}
+
 	if underlying == nil {
 		l.u = log.Default()
 	} else {
 		l.u = underlying
 	}
+	handleFileNameConfig()
 }
 
 // Unexported function for convenient log message forming.
 //
 // This internal function assumes internal caller has already locked the mutex.
 func (l *Logger) getLogMsg(levelStr, msg string) string {
-	ret := fmt.Sprintf("%s%s%s %s",
-		l.c.LogLevelPrefix,
-		levelStr,
-		l.c.LogLevelSuffix,
-		msg)
+	var ret string
+
+	if l.c.IsLoggingLongFile || l.c.IsLoggingShortFile {
+		_, file, line, ok := runtime.Caller(2) // 2 to get caller of caller of getLogMsg()
+
+		if !ok {
+			file = "???"
+			line = 0
+		} else if l.c.IsLoggingShortFile {
+			// Find the first instance of '/' from the rightmost.
+			short := file
+
+			for i := len(file) - 1; i > 0; i-- {
+				if file[i] == '/' {
+					// Take the substring starting from right after the '/'.
+					short = file[i+1:]
+					break
+				}
+			}
+
+			file = short
+		}
+
+		ret = fmt.Sprintf("%s%s:%d%s %s%s%s %s",
+			l.c.FileNamePrefix,
+			file,
+			line,
+			l.c.FileNameSuffix,
+			l.c.LogLevelPrefix,
+			levelStr,
+			l.c.LogLevelSuffix,
+			msg)
+	} else {
+		ret = fmt.Sprintf("%s%s%s %s",
+			l.c.LogLevelPrefix,
+			levelStr,
+			l.c.LogLevelSuffix,
+			msg)
+	}
+
 	return ret
-}
-
-// Unexported function for convenient log message printing.
-// Returns string of the log message just printed.
-//
-// This internal function assumes internal caller has already locked the mutex.
-func (l *Logger) logEntry(levelStr string, msg string) {
-	str := l.getLogMsg(levelStr, msg)
-
-	l.u.Print(str)
 }
 
 // Get the log LogLevel string depending on the configured flag for preferring short form.
 //
 // This internal function assumes internal caller has already locked the mutex.
 func (l *Logger) getLevelStr(LogLevel LogLevel) string {
-	if l.c.IsPreferShortName {
+	if l.c.IsPreferShortLevel {
 		return logLevelShortName[LogLevel]
 	} else {
 		return logLevelName[LogLevel]
@@ -214,7 +257,8 @@ func (l *Logger) TraceL3(v ...any) {
 	}
 
 	msg := fmt.Sprint(v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log trace LogLevel 3 message with usage equivalent to Printf().
@@ -229,7 +273,8 @@ func (l *Logger) TraceL3f(format string, v ...any) {
 	}
 
 	msg := fmt.Sprintf(format, v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log trace LogLevel 2 message with usage equivalent to Print().
@@ -244,7 +289,8 @@ func (l *Logger) TraceL2(v ...any) {
 	}
 
 	msg := fmt.Sprint(v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log trace LogLevel 2 message with usage equivalent to Printf().
@@ -259,7 +305,8 @@ func (l *Logger) TraceL2f(format string, v ...any) {
 	}
 
 	msg := fmt.Sprintf(format, v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log trace LogLevel 1 message with usage equivalent to Print().
@@ -274,7 +321,8 @@ func (l *Logger) TraceL1(v ...any) {
 	}
 
 	msg := fmt.Sprint(v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log trace LogLevel 1 message with usage equivalent to Printf().
@@ -289,7 +337,8 @@ func (l *Logger) TraceL1f(format string, v ...any) {
 	}
 
 	msg := fmt.Sprintf(format, v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log debug message with usage equivalent to Print().
@@ -304,7 +353,8 @@ func (l *Logger) Debug(v ...any) {
 	}
 
 	msg := fmt.Sprint(v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log debug message with usage equivalent to Printf().
@@ -319,7 +369,8 @@ func (l *Logger) Debugf(format string, v ...any) {
 	}
 
 	msg := fmt.Sprintf(format, v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log info message with usage equivalent to Print().
@@ -334,7 +385,8 @@ func (l *Logger) Info(v ...any) {
 	}
 
 	msg := fmt.Sprint(v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log info message with usage equivalent to Printf().
@@ -349,7 +401,8 @@ func (l *Logger) Infof(format string, v ...any) {
 	}
 
 	msg := fmt.Sprintf(format, v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log notice message with usage equivalent to Print().
@@ -364,7 +417,8 @@ func (l *Logger) Notice(v ...any) {
 	}
 
 	msg := fmt.Sprint(v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log notice message with usage equivalent to Printf().
@@ -379,7 +433,8 @@ func (l *Logger) Noticef(format string, v ...any) {
 	}
 
 	msg := fmt.Sprintf(format, v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log error message with usage equivalent to Print().
@@ -394,7 +449,8 @@ func (l *Logger) Error(v ...any) {
 	}
 
 	msg := fmt.Sprint(v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log error message with usage equivalent to Printf().
@@ -409,7 +465,8 @@ func (l *Logger) Errorf(format string, v ...any) {
 	}
 
 	msg := fmt.Sprintf(format, v...)
-	l.logEntry(l.getLevelStr(funcLevel), msg)
+	str := l.getLogMsg(l.getLevelStr(funcLevel), msg)
+	l.u.Print(str)
 }
 
 // Log panic message with usage equivalent to Print().
