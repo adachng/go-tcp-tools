@@ -20,7 +20,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// https://go.dev/blog/pipelines
+// Example program to gracefully handle all expected "errors" in TCP connection.
+//
+// The 2 expected errors are:
+// - Operation done on already-closed socket (on local end) checked via errors.Is(err, net.ErrClosed).
+// - Operation detected remote peer closing the socket checked via errors.Is(err, io.EOF).
+//
+// Other benign "errors" may be timeouts, resets, and cancellations.
+//
+// Any other errors are unusual and need attention.
 package main
 
 import (
@@ -40,20 +48,35 @@ import (
 const destAddr = "127.0.0.1:1234"
 
 func handleConn(ctx context.Context, c net.Conn) {
-	defer log.Default().Print("handleConn() exited")
+	// Best practice to defer close of connection here, even though it may already be closed
+	// as control flow.
+	defer func() {
+		log.Print("handleConn() exited")
+		err := c.Close()
+		// Handle it properly by filtering with errors.Is(err, net.ErrClosed).
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Panic(err)
+		}
+	}()
 
 	req := []byte("hello\n")
 
+	// Blocking write "hello\n" and if already closed, just return.
 	nwrite, err := c.Write(req)
-	if err != nil {
-		log.Default().Print("net.Conn.Write() error = [", err, "]")
+	if errors.Is(err, net.ErrClosed) {
+		log.Print("net.Conn.Write() on already closed")
+		return
+	} else if err != nil {
+		// Some unknown error. Needs attention.
+		log.Panic("net.Conn.Write() error = [", err, "]")
 		return
 	}
 
-	log.Default().Print("nwrite = ", nwrite)
+	log.Print("nwrite = ", nwrite)
 
 	buf := make([]byte, 1024)
 
+	// Main loop to print response.
 	for {
 		select {
 		case <-ctx.Done():
@@ -63,20 +86,24 @@ func handleConn(ctx context.Context, c net.Conn) {
 		}
 
 		nread, err := c.Read(buf)
-		if err != nil {
-			if errors.Is(err, io.EOF) { // expected
-				return
-			}
-			log.Default().Print("net.Conn.Read() error = [", err, "]")
+		if errors.Is(err, net.ErrClosed) {
+			log.Print("net.Conn.Read() on already closed")
+			return
+		} else if errors.Is(err, io.EOF) {
+			log.Print("net.Conn.Read() detected remote peer close")
+			return
+		} else if err != nil {
+			log.Panic("net.Conn.Read() error = [", err, "]")
 			return
 		}
 
-		log.Default().Print("nread = [", nread, "]")
+		log.Print("nread = [", nread, "]")
 		byteSubSeg := buf[0:nread]
 		hexStr := strings.ToUpper(hex.EncodeToString(byteSubSeg))
-		str := string(buf[0:nread])
-		log.Default().Print("buf (HEX) = [", hexStr, "]")
-		log.Default().Print("buf (ASCII) = [", str, "]")
+		log.Print("buf (HEX) = [", hexStr, "]")
+		// NOTE: do this if desired in ASCII.
+		// str := string(buf[0:nread])
+		// log.Print("buf (ASCII) = [", str, "]")
 	}
 }
 
@@ -86,14 +113,25 @@ func handleConn(ctx context.Context, c net.Conn) {
 //
 // To terminate gracefully, signal needs to trigger the TCP endpoint to close.
 func main() {
-	log.Default().SetFlags(log.Default().Flags() | log.Lmicroseconds | log.Lshortfile)
+	log.SetFlags(log.Flags() | log.Lmicroseconds | log.Lshortfile)
 
-	log.Default().Print("Starting net.Dial()")
+	log.Print("Starting net.Dial()")
 	conn, err := net.Dial("tcp", destAddr)
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
-	log.Default().Print("Connected with net.Dial()")
+
+	// It is also okay to defer this close, as long as it is filtered with errors.Is(err, net.ErrClosed).
+	defer func() {
+		log.Print("handleConn() exited")
+		err := conn.Close()
+
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Panic(err)
+		}
+	}()
+
+	log.Print("Connected with net.Dial()")
 
 	var wg sync.WaitGroup
 
@@ -112,18 +150,19 @@ func main() {
 
 	// Blocking wait for the context cancellation.
 	<-ctx.Done()
-	log.Default().Print("ctx.Done() received with cause = [", context.Cause(ctx), "]")
+	log.Print("ctx.Done() received with cause = [", context.Cause(ctx), "]")
 
+	// Can control the flow by closing it.
 	err = conn.Close()
-	if err != nil {
-		panic(err)
-	} else {
-		log.Default().Print("Connection closed successfully")
+	if err != nil && !errors.Is(err, net.ErrClosed) {
+		log.Panic(err)
 	}
+
+	log.Print("Connection closed successfully")
 
 	// Wait for the goroutine in case which the program is
 	// ended via SIGINT or SIGTERM instead of remote peer closing.
-	log.Default().Print("Waiting for goroutine")
+	log.Print("Waiting for goroutine")
 	wg.Wait()
-	log.Default().Print("Wait complete")
+	log.Print("Wait complete")
 }
