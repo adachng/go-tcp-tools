@@ -82,13 +82,16 @@ func main() {
 		log.Panic(err)
 	}
 
+	// Use [sync.Once] to not see the repeated close errors.
+	var o sync.Once
+
 	// Defer close of listener.
-	defer func() {
+	defer o.Do(func() {
 		err := closeListener(l)
 		if err != nil {
 			log.Panic(err)
 		}
-	}()
+	})
 
 	// Set up control flow.
 	var wg sync.WaitGroup
@@ -98,7 +101,7 @@ func main() {
 	// Goroutine for accepting connections.
 	wg.Go(func() {
 		// Defer close of listener.
-		defer func() {
+		defer o.Do(func() {
 			err := closeListener(l)
 			if err != nil {
 				log.Panic(err)
@@ -106,7 +109,7 @@ func main() {
 
 			// Don't forget to unblock main goroutine, so main goroutine can further clean up.
 			stopFunc()
-		}()
+		})
 
 		// Main listener loop.
 		for {
@@ -171,10 +174,12 @@ func main() {
 	// Unblocked by signals or calling the stop function returned in the setup.
 	<-ctx.Done()
 
-	err = closeListener(l)
-	if err != nil {
-		log.Panic(err)
-	}
+	o.Do(func() {
+		err = closeListener(l)
+		if err != nil {
+			log.Panic(err)
+		}
+	})
 
 	wg.Wait()
 	log.Print("Program returned successfully")
