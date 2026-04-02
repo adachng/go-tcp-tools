@@ -315,7 +315,7 @@ func (a *App) Run(ctx context.Context) error {
 			defer closeSrcCOnce.Do(closeSrcConn)
 
 			// Validate connection source.
-			if strings.Split(srcConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
+			if a.c.SrcIP.String() != "0.0.0.0" && strings.Split(srcConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
 				closeSrcCOnce.Do(closeSrcConn)
 				a.logNot("New connection from ", srcConn.RemoteAddr().String(), " rejected due to not matching ", a.c.SrcIP.String())
 				continue
