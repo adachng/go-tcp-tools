@@ -1,214 +1,74 @@
+// MIT License
+//
+// Copyright (c) 2026-present adachng (github.com/adachng)
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 package main
 
 import (
-	"errors"
-	"flag"
-	"io"
-	"log"
+	"context"
 	"net"
-	"strconv"
-	"strings"
-	"sync"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/adachng/go-tcp-tools/internal/logger"
-
-	"github.com/google/uuid"
+	"github.com/adachng/go-tcp-tools/internal/logx"
+	"github.com/adachng/go-tcp-tools/internal/proxy"
 )
 
-type config struct {
-	listenPort uint
-	srcAddr    string // e.g. "192.168.0.0"
-	dstAddr    string // e.g. "192.168.0.0:1234"
+type proxyLoggerAdapter struct {
+	l *logx.Logger
 }
 
-func parseIntoConfig() config {
-	var ret config
+func (l proxyLoggerAdapter) Debug(v ...any)  { l.l.Debug(v...) }
+func (l proxyLoggerAdapter) Info(v ...any)   { l.l.Info(v...) }
+func (l proxyLoggerAdapter) Notice(v ...any) { l.l.Notice(v...) }
+func (l proxyLoggerAdapter) Error(v ...any)  { l.l.Error(v...) }
 
-	// Parse CLI flags:
-	flag.StringVar(&ret.dstAddr,
-		"dst",
-		"",
-		"Destination IP address in form of \"192.168.0.0:1234\"")
-
-	flag.StringVar(&ret.srcAddr,
-		"src",
-		"",
-		"Source IP address in form of \"192.168.0.0\" (exclude port)")
-
-	flag.UintVar(&ret.listenPort, "p", uint(0), "Proxy listen port")
-
-	flag.Parse()
-
-	return ret
-}
-
-func validateConfig(c config) error {
-	var ret error
-
-	if c.listenPort <= 0 {
-		ret = errors.New("Invalid c.listenPort = [" + strconv.FormatUint(uint64(c.listenPort), 10) + "]")
-	}
-
-	if len(c.dstAddr) <= 0 { // || !isValidIPv4(c.dstAddr) {
-		ret = errors.New("Invalid c.dstAddr = [" + c.dstAddr + "] with len [" + strconv.FormatInt(int64(len(c.dstAddr)), 10) + "]")
-	}
-
-	if len(c.srcAddr) <= 0 || !isValidIPv4(c.srcAddr) {
-		ret = errors.New("Invalid c.srcAddr = [" + c.srcAddr + "] with len [" + strconv.FormatInt(int64(len(c.srcAddr)), 10) + "]")
-	}
-
-	return ret
-}
-
-func isValidIPv4(s string) bool {
-	if strings.Contains(s, ":") {
-		return false
-	}
-
-	ip := net.ParseIP(s)
-	if ip == nil {
-		return false
-	}
-
-	if ip.To4() == nil {
-		return false
-	}
-
-	return true
+// For the [proxy.Logger] interface since [logx.Logger] does not have this exact function.
+func (l proxyLoggerAdapter) IncCallDepth() {
+	c := l.l.GetConfig()
+	c.CallDepth++
+	l.l.Configure(c)
 }
 
 func main() {
-	// App config:
-	c := parseIntoConfig()
+	c := proxy.Config{
+		ListenPort: uint(8090),
 
-	// Validate config:
-	{
-		err := validateConfig(c)
-		if err != nil {
-			logger.Get().Fatal(err)
-		}
+		SrcIP:   net.ParseIP("127.0.0.1"),
+		DstAddr: "127.0.0.1:8091",
 	}
 
-	// Log CLI input:
-	{
-		currentLogger := logger.Get()
+	p := proxyLoggerAdapter{l: logx.Default()}
 
-		currentLogger.Printf("c.dstAddr = [%s]\n", c.dstAddr)
-		currentLogger.Printf("c.srcAddr = [%s]\n", c.srcAddr)
-		currentLogger.Printf("c.listenPort = [%v]\n", c.listenPort)
-	}
-
-	// Establish listener:
-	listenAddr := ":" + strconv.FormatUint(uint64(c.listenPort), 10)
-
-	logger.Get().Printf("Proxy listening at [%s]\n", listenAddr)
-
-	listener, err := net.Listen("tcp", listenAddr)
+	app, err := proxy.New(c, p)
 	if err != nil {
-		log.Default().Fatal(err)
+		panic(err)
 	}
 
-	// Defer the listener.Close() to end of main():
-	defer func() {
-		err := listener.Close()
-		if err != nil {
-			log.Default().Panic(err)
-		}
-	}()
+	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill, syscall.SIGTERM)
 
-	// Main loop:
-	for {
-		conn, err := listener.Accept() // blocking function
+	err = app.Run(ctx)
 
-		if err != nil {
-			logger.Get().Printf("Accept() error: [%s]\n", err)
-			continue
-		}
-
-		if true { // conn.RemoteAddr().String() == c.srcAddr {
-			logger.Get().Printf("Accepted source connection from [%s]\n", conn.RemoteAddr().String())
-			go handleConn(conn, c.dstAddr)
-		} else {
-			logger.Get().Printf("Invalid source connection accepted from [%s], closing connection\n", conn.RemoteAddr().String())
-			err := conn.Close()
-			if err != nil {
-				logger.Get().Printf("Close() error: [%s]\n", err)
-				continue
-			} else {
-				logger.Get().Printf("Connection closed successfully\n")
-			}
-		}
-	}
-}
-
-func handleConn(srcConn net.Conn, dstAddr string) {
-	// UUID to represent source connection:
-	connId := uuid.New().String()
-	logger.Get().Printf(
-		"[%s]: Source connection [%s] tied to UUID\n",
-		connId,
-		srcConn.RemoteAddr().String(),
-	)
-
-	// Defer closing source connection:
-	defer func() {
-		err := srcConn.Close()
-		logger.Get().Printf(
-			"[%s]: Source connection [%s] closed\n",
-			connId,
-			srcConn.RemoteAddr().String(),
-		)
-		if err != nil {
-			logger.Get().Print("[", connId, "]: ", err)
-		}
-	}()
-
-	// Attempt to dial to destination:
-	dstConn, err := net.Dial("tcp", dstAddr)
 	if err != nil {
-		logger.Get().Print("[", connId, "]: ", err)
-		return
+		panic(err)
 	}
-
-	logger.Get().Printf(
-		"[%s]: Dialed to [%s] successfully\n",
-		connId,
-		dstConn.RemoteAddr().String(),
-	)
-
-	// Defer closing destination connection:
-	defer func() {
-		err := dstConn.Close()
-		logger.Get().Printf(
-			"[%s]: Destination connection [%s] closed\n",
-			connId,
-			dstConn.RemoteAddr().String(),
-		)
-		if err != nil {
-			logger.Get().Print("[", connId, "]: ", err)
-		}
-	}()
-
-	// Concurrent stream copying:
-	var s sync.WaitGroup
-
-	// Reader from source to writer from destination:
-	s.Go(func() {
-		_, err := io.Copy(dstConn, srcConn)
-		if err != nil {
-			logger.Get().Print("[", connId, "]: ", err)
-			return
-		}
-	})
-
-	// Reader from destination to writer from source:
-	s.Go(func() {
-		_, err := io.Copy(dstConn, srcConn)
-		if err != nil {
-			logger.Get().Print("[", connId, "]: ", err)
-			return
-		}
-	})
-
-	s.Wait()
 }
