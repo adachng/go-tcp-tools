@@ -24,6 +24,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -108,7 +109,20 @@ type App struct {
 }
 
 func (h hexWriter) Write(b []byte) (n int, err error) {
-	h.a.logInf("[", h.uuid, "] ", len(b), " bytes written from ", h.srcAddr, " to ", h.dstAddr)
+	hexStr := strings.ToUpper(hex.EncodeToString(b))
+
+	h.a.logInf(
+		"[", h.uuid, "] ",
+		len(b),
+		" bytes written from ",
+		h.srcAddr,
+		" to ",
+		h.dstAddr,
+		"\n\t[",
+		hexStr,
+		"]",
+	)
+
 	return len(b), nil
 }
 
