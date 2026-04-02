@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -294,9 +295,9 @@ func (a *App) Run(ctx context.Context) error {
 			defer closeSrcCOnce.Do(closeSrcConn)
 
 			// Validate connection source.
-			if srcConn.RemoteAddr().String() != a.c.SrcIP.String() {
+			if strings.Split(srcConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
 				closeSrcCOnce.Do(closeSrcConn)
-				a.logNot("New connection from ", srcConn.RemoteAddr().String(), " rejected")
+				a.logNot("New connection from ", srcConn.RemoteAddr().String(), " rejected due to not matching ", a.c.SrcIP.String())
 				continue
 			}
 
