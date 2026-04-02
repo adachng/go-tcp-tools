@@ -367,12 +367,11 @@ func (a *App) Run(ctx context.Context) error {
 					defer closeDstCOnce.Do(closeDstConn)
 
 					hW := newHexWriter(a, connUUID, srcConn.RemoteAddr(), dstConn.RemoteAddr())
-					teeR := io.TeeReader(dstConn, hW)
+					teeR := io.TeeReader(srcConn, hW)
 					bytesWritten, err := io.Copy(dstConn, teeR)
-					// bytesWritten, err := io.Copy(srcConn, srcConn) // TODO: delete
 
 					if errors.Is(err, net.ErrClosed) {
-						ret = a.joinErr(ret, ErrCRepeatedClose)
+						ret = a.joinErr(ret, ErrCRepeatedClose) // TODO: this should not be part of ret, or the if should not be here
 					} else if errors.Is(err, io.EOF) {
 						panic("io.Copy returned EOF error") // never happens according to official docs
 					} else if err != nil {
@@ -388,12 +387,11 @@ func (a *App) Run(ctx context.Context) error {
 					defer closeDstCOnce.Do(closeDstConn)
 
 					hW := newHexWriter(a, connUUID, dstConn.RemoteAddr(), srcConn.RemoteAddr())
-					teeR := io.TeeReader(srcConn, hW)
+					teeR := io.TeeReader(dstConn, hW)
 					bytesWritten, err := io.Copy(srcConn, teeR)
-					// bytesWritten, err := io.Copy(srcConn, dstConn) // TODO: delete
 
 					if errors.Is(err, net.ErrClosed) {
-						ret = a.joinErr(ret, ErrCRepeatedClose)
+						ret = a.joinErr(ret, ErrCRepeatedClose) // TODO: this should not be part of ret, or the if should not be here
 					} else if errors.Is(err, io.EOF) {
 						panic("io.Copy returned EOF error") // never happens according to official docs
 					} else if err != nil {
