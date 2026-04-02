@@ -63,6 +63,8 @@ type Logger interface {
 	Info(v ...any)   // bytes relayed
 	Notice(v ...any) // new accepted connections and closed connections
 	Error(v ...any)  // unexpected errors
+
+	IncCallDepth() // increments the call depth by 1; required if the logger writes file names, otherwise can be no-op
 }
 
 type Config struct {
@@ -178,6 +180,10 @@ func (a *App) logErr(v ...any) {
 
 // Return an [App] with specified [Config] and [Logger] interface (can be [nil]).
 func New(c Config, l Logger) (*App, error) {
+	if l != nil {
+		l.IncCallDepth()
+	}
+
 	var err error = nil
 
 	if c.ListenPort <= 0 {
