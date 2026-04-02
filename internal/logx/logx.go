@@ -97,6 +97,8 @@ type Config struct {
 
 	LogLevel LogLevel
 
+	CallDepth int // recommended to be increased if applicable
+
 	IsPreferShortLevel bool
 	IsLoggingLongFile  bool // logs long file name (only when IsLoggingShortFile is false)
 	IsLoggingShortFile bool // overrides IsLoggingFile if true
@@ -113,18 +115,23 @@ type Logger struct {
 // Singleton instance of Logger for convenience.
 var singleton *Logger = nil
 
-func init() { // https://go.dev/doc/effective_go#init
-	u := log.Default()
-	u.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
-
-	c := Config{
+func NewDefaultConfig() Config {
+	return Config{
 		LogLevelPrefix:     "{",
 		LogLevelSuffix:     "}",
 		FileNamePrefix:     "|",
 		FileNameSuffix:     "|",
 		LogLevel:           LevelDebug,
+		CallDepth:          2, // 2 to get caller of caller of getLogMsg()
 		IsPreferShortLevel: true,
 	}
+}
+
+func init() { // https://go.dev/doc/effective_go#init
+	u := log.Default()
+	u.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+
+	c := NewDefaultConfig()
 
 	singleton = New(u, c)
 }
@@ -151,6 +158,14 @@ func (l *Logger) Configure(c Config) {
 	defer l.mu.Unlock()
 
 	l.c = c
+}
+
+// Returns a copy of the logger configurations.
+func (l *Logger) GetConfig() Config {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.c
 }
 
 // Sets the current [Logger] instance's [LogLevel]. Mutes log entries lower than current [LogLevel].
@@ -207,7 +222,7 @@ func (l *Logger) getLogMsg(levelStr, msg string) string {
 	var ret string
 
 	if l.c.IsLoggingLongFile || l.c.IsLoggingShortFile {
-		_, file, line, ok := runtime.Caller(2) // 2 to get caller of caller of getLogMsg()
+		_, file, line, ok := runtime.Caller(l.c.CallDepth)
 
 		if !ok {
 			file = "???"
