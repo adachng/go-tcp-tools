@@ -24,51 +24,216 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/adachng/go-tcp-tools/internal/logx"
 	"github.com/adachng/go-tcp-tools/internal/proxy"
 )
 
-type proxyLoggerAdapter struct {
-	l *logx.Logger
+type listener struct {
 }
 
-func (l proxyLoggerAdapter) Debug(v ...any)  { l.l.Debug(v...) }
-func (l proxyLoggerAdapter) Info(v ...any)   { l.l.Info(v...) }
-func (l proxyLoggerAdapter) Notice(v ...any) { l.l.Notice(v...) }
-func (l proxyLoggerAdapter) Error(v ...any)  { l.l.Error(v...) }
+func (l *listener) GotError(uuid string, err error) {
+	if uuid == "" {
+		logx.Default().Error("Error:\n\t", err)
+	} else {
+		logx.Default().Error("[", uuid, "] error:\n\t", err)
+	}
+}
 
-// For the [proxy.Logger] interface since [logx.Logger] does not have this exact function.
-func (l proxyLoggerAdapter) IncCallDepth() {
-	c := l.l.GetConfig()
-	c.CallDepth++
-	l.l.Configure(c)
+func (l *listener) AttemptedListen(lAddr net.Addr, err error) {
+	lAddrStr := ""
+	if lAddr != nil {
+		lAddrStr = "at " + lAddr.String() + " "
+	}
+
+	if err != nil {
+		logx.Default().Error("Proxy listener ", lAddrStr, "failed:\n\t", err)
+	} else {
+		logx.Default().Notice("Proxy listener successfully established at ", lAddr.String())
+	}
+}
+
+func (l *listener) AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
+	rAddrStr := ""
+	if rAddr != nil {
+		rAddrStr = "from " + rAddr.String() + " "
+	}
+
+	if errors.Is(err, net.ErrClosed) {
+		// Benign case of listener closed from somewhere else.
+		logx.Default().Info("Attempt to accept inbound connection ", rAddrStr, "is cancelled")
+	} else if err != nil {
+		// Actual unexpected error.
+		logx.Default().Error("Attempt to accept inbound connection from ", rAddrStr, "failed:\n\t", err)
+	} else {
+		suffix := ""
+		if lAddr != nil {
+			suffix = "to local address " + lAddr.String()
+		}
+
+		msg := "Successfully accepted inbound connection " + rAddrStr + suffix
+		logx.Default().Info(strings.TrimSuffix(msg, " "))
+	}
+}
+
+func (l *listener) FailedSrcConn(rAddr net.Addr, match string) {
+	rAddrStr := ""
+	if rAddr != nil {
+		rAddrStr = "from " + rAddr.String() + " "
+	}
+
+	logx.Default().Notice("Inbound connection ", rAddrStr, "rejected (does not match ", match, ")")
+}
+
+func (l *listener) ValidatedSrcConn(rAddr net.Addr, match string) {
+	rAddrStr := ""
+	if rAddr != nil {
+		rAddrStr = "from " + rAddr.String() + " "
+	}
+
+	logx.Default().Info("Inbound connection ", rAddrStr, "validated against ", match, " successfully")
+}
+
+func (l *listener) AttemptedDial(lAddr net.Addr, rAddr net.Addr, err error) {
+	lAddrStr := ""
+	if lAddr != nil {
+		lAddrStr = "from local address " + lAddr.String() + " "
+	}
+
+	rAddrStr := ""
+	if rAddr != nil {
+		rAddrStr = "to remote address " + rAddr.String() + " "
+	}
+
+	if err != nil {
+		logx.Default().Error("Outbound connection attempt ", lAddrStr, rAddrStr, "failed:\n\t", err)
+	} else {
+		logx.Default().Info("Successfully connected outbound ", lAddrStr, rAddrStr)
+	}
+}
+
+func (l *listener) GotConnPair(uuid string, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
+	prefix := ""
+	if uuid != "" {
+		prefix = "[" + uuid + "] "
+	}
+
+	logx.Default().Notice(prefix, "Proxy connection established:\n\t", srcRAddr.String(), " > ", srcLAddr.String(), " > ", dstLAddr.String(), " > ", dstRAddr.String())
+}
+
+func (l *listener) RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAddr net.Addr) {
+	prefix := ""
+	if uuid != "" {
+		prefix = "[" + uuid + "] "
+	}
+
+	hexStr := strings.ToUpper(hex.EncodeToString(b))
+
+	logx.Default().Info(prefix, "Relayed ", len(b), " bytes from ", srcRAddr, " to ", dstRAddr, ":\n\t", hexStr)
+}
+
+func (l *listener) AttemptedIOCopy(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
+	prefix := ""
+	if uuid != "" {
+		prefix = "[" + uuid + "] "
+	}
+
+	prefix += "IO copy from " + srcRAddr.String() + " to " + dstRAddr.String() + " with " + strconv.FormatInt(bytesWritten, 10) + " bytes written:\n\t"
+
+	if errors.Is(err, net.ErrClosed) {
+		logx.Default().Info(prefix, "IO copy interrupted by connection closing")
+	} else if errors.Is(err, io.EOF) {
+		logx.Default().Panic(prefix, "io.Copy returned EOF error") // never happens according to official docs
+	} else if err != nil {
+		logx.Default().Notice(prefix, "Success (EOF encountered)")
+	}
+}
+
+func (l *listener) ClosedConn(uuid string, lAddr net.Addr, rAddr net.Addr, err error) {
+	prefix := ""
+	if uuid != "" {
+		prefix = "[" + uuid + "] "
+	}
+
+	if errors.Is(err, net.ErrClosed) {
+		logx.Default().Panic(prefix, "Connection with ", rAddr.String(), " is repeatedly closed")
+	} else if errors.Is(err, io.EOF) {
+		logx.Default().Info(prefix, "Connection with ", rAddr.String(), " is closed somewhere else")
+	} else if err != nil {
+		logx.Default().Error(prefix, "Connection with ", rAddr.String(), " failed to close:\n\t", err)
+	} else {
+		logx.Default().Notice(prefix, "Connection with ", rAddr.String(), " is closed successfully")
+	}
+}
+
+func (l *listener) ClosedListener(lAddr net.Addr, err error) {
+	if errors.Is(err, net.ErrClosed) {
+		logx.Default().Panic("Listener at ", lAddr.String(), " is repeatedly closed")
+	} else if err != nil {
+		logx.Default().Error("Listener at ", lAddr.String(), " failed to close:\n\t", err)
+	} else {
+		logx.Default().Notice("Listener at ", lAddr.String(), " is closed successfully")
+	}
+}
+
+func printUsage(err error) {
+	if err != nil {
+		fmt.Println("Error:\n\t", err)
+	}
+
+	fmt.Println("Usage:\n\t", os.Args[0], " <PORT> <INBOUND_IPV4> <OUTBOUND_IPV4_WITH_PORT>")
 }
 
 func main() {
-	c := proxy.Config{
-		ListenPort: uint(8090),
-
-		SrcIP:   net.ParseIP("127.0.0.1"),
-		DstAddr: "127.0.0.1:8091",
+	if len(os.Args) < 4 {
+		printUsage(errors.New("main: not enough arguments"))
+		return
 	}
 
-	p := proxyLoggerAdapter{l: logx.Default()}
+	logx.Default().LogTime()
 
-	app, err := proxy.New(c, p)
+	args := os.Args
+	port, err := strconv.ParseUint(args[1], 10, 16)
+
 	if err != nil {
-		panic(err)
+		printUsage(err)
+		return
+	}
+
+	ip := net.ParseIP(args[2])
+
+	c := proxy.Config{
+		ListenPort: uint(port),
+
+		SrcIP:   ip,
+		DstAddr: args[3],
+	}
+
+	l := listener{}
+
+	app, err := proxy.New(c, &l)
+	if err != nil {
+		printUsage(err)
 	}
 
 	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill, syscall.SIGTERM)
 
-	err = app.Run(ctx)
-
-	if err != nil {
-		panic(err)
+	// Configure the call depth to be inside the proxy package.
+	{
+		c := logx.Default().GetConfig()
+		c.CallDepth += 2
+		logx.Default().Configure(c)
 	}
+
+	app.Run(ctx)
 }
