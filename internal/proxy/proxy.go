@@ -24,7 +24,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -56,192 +55,95 @@ var (
 	ErrSrcIP = errors.New("proxy: invalid source IPv4 address (not in form \"123.456.789.012\")")
 
 	// Invalid destination address.
-	ErrDstIP = errors.New("proxy: invalid destination address (not in form \"123.456.789.012:1234\")")
+	ErrDstAddr = errors.New("proxy: invalid destination address (not in form \"123.456.789.012:1234\")")
 )
 
-type Logger interface {
-	Debug(v ...any)  // repeated close which should not be possible in here, but harmless
-	Info(v ...any)   // bytes relayed
-	Notice(v ...any) // new accepted connections and closed connections
-	Error(v ...any)  // unexpected errors
-
-	IncCallDepth() // increments the call depth by 1; required if the logger writes file names, otherwise can be no-op
-}
-
 type Config struct {
-	// The port number that the proxy server listens on.
-	ListenPort uint
-
 	// Inbound connection filter.
 	SrcIP net.IP
 
 	// Outbound connection destination address in the form of "192.168.0.1:1234".
 	DstAddr string
-}
 
-// Implements [io.Writer] for [io.TeeReader] to log all bytes relayed in hex.
-type hexWriter struct {
-	a    *App
-	uuid string // UUID of the source and destination connections instance
-
-	srcAddr net.Addr // not to be confused with source connection; the source of bytes to write
-	dstAddr net.Addr // not to be confused with source connection; the destination of bytes to write to
-}
-
-func newHexWriter(a *App, uuid string, srcA net.Addr, dstA net.Addr) hexWriter {
-	return hexWriter{
-		a:    a,
-		uuid: uuid,
-
-		srcAddr: srcA,
-		dstAddr: dstA,
-	}
+	// The port number that the proxy server listens on.
+	ListenPort uint
 }
 
 // [App] structure of the entire [proxy] package.
 type App struct {
-	logMu sync.Mutex // enable hot-swapping logger
-	l     Logger     // interface
-	c     Config
+	c Config
 
-	countMu   sync.Mutex
-	connCount uint
+	subscriber EventListener // TODO: make atomic to make hot-swappable
 }
 
-func (h hexWriter) Write(b []byte) (n int, err error) {
-	hexStr := strings.ToUpper(hex.EncodeToString(b))
-
-	h.a.logInf(
-		"[", h.uuid, "] ",
-		len(b),
-		" bytes written from ",
-		h.srcAddr,
-		" to ",
-		h.dstAddr,
-		"\n\t[",
-		hexStr,
-		"]",
-	)
-
-	return len(b), nil
-}
-
-// Returns the total number of unclosed connections (excluding listener) in this [App].
-func (a *App) GetConnCount() uint {
-	a.countMu.Lock()
-	defer a.countMu.Unlock()
-
-	return a.connCount
-}
-
-func (a *App) incConnCount() {
-	a.countMu.Lock()
-	defer a.countMu.Unlock()
-
-	a.connCount++
-}
-
-func (a *App) decConnCount() {
-	a.countMu.Lock()
-	defer a.countMu.Unlock()
-
-	a.connCount--
-}
-
-// Hot-swaps the [Logger] of this [App].
-func (a *App) SetLogger(l Logger) {
-	a.logMu.Lock()
-	defer a.logMu.Unlock()
-
-	a.l = l
-}
-
-func (a *App) logDeb(v ...any) {
-	a.logMu.Lock()
-	defer a.logMu.Unlock()
-
-	if a.l != nil {
-		a.l.Debug(v...)
-	}
-}
-
-func (a *App) logInf(v ...any) {
-	a.logMu.Lock()
-	defer a.logMu.Unlock()
-
-	if a.l != nil {
-		a.l.Info(v...)
-	}
-}
-
-func (a *App) logNot(v ...any) {
-	a.logMu.Lock()
-	defer a.logMu.Unlock()
-
-	if a.l != nil {
-		a.l.Notice(v...)
-	}
-}
-
-func (a *App) logErr(v ...any) {
-	a.logMu.Lock()
-	defer a.logMu.Unlock()
-
-	if a.l != nil {
-		a.l.Error(v...)
-	}
-}
-
-// Return an [App] with specified [Config] and [Logger] interface (can be [nil]).
-func New(c Config, l Logger) (*App, error) {
-	if l != nil {
-		l.IncCallDepth()
-	}
-
+// Return an [App] with specified [Config] and [EventListener] interface (can be [nil]).
+func New(c Config, s EventListener) (*App, error) {
 	var err error = nil
 
 	if c.ListenPort <= 0 {
 		err = errors.Join(err, ErrInvalidPort)
 	}
 
-	if c.SrcIP == nil || c.DstAddr == "" {
+	if c.SrcIP == nil {
 		err = errors.Join(err, ErrSrcIP)
 	}
 
-	if c.DstAddr == "" {
-		err = errors.Join(err, ErrDstIP)
+	strs := strings.Split(c.DstAddr, ":")
+	ip := strs[0]
+	if c.DstAddr == "" || len(strs) != 2 || net.ParseIP(ip) == nil {
+		err = errors.Join(err, ErrDstAddr)
 	}
 
 	if err == nil {
 		return &App{
-			c:         c,
-			l:         l,
-			connCount: 0,
+			c:          c,
+			subscriber: s,
 		}, nil
 	}
 
 	return nil, err
 }
 
-// Convenience function to call [App.logErr] and then join 2 errors.
-func (a *App) joinErr(err error, newErr error) error {
-	a.logErr(newErr)
-	return errors.Join(err, newErr)
-}
+func (a *App) Run(ctx context.Context) {
+	// Validate config.
+	if a.c.SrcIP == nil {
+		a.gotError("", ErrSrcIP)
+		return
+	}
+	if a.c.ListenPort <= 0 {
+		a.gotError("", ErrInvalidPort)
+		return
+	}
 
-func (a *App) Run(ctx context.Context) error {
-	ret := error(nil)
+	// Validate a.c.DstAddr.
+	{
+		strs := strings.Split(a.c.DstAddr, ":")
+		if len(strs) != 2 {
+			a.gotError("", ErrDstAddr)
+			return
+		}
+
+		ip := strs[0]
+		if net.ParseIP(ip) == nil {
+			a.gotError("", ErrDstAddr)
+			return
+		}
+	}
 
 	// Start the listener.
 	lPort := uint64(a.c.ListenPort)
 
 	l, err := net.Listen("tcp", ":"+strconv.FormatUint(lPort, 10))
-	if err != nil {
-		ret = a.joinErr(ret, err)
-		return ret
+
+	if l != nil {
+		a.attemptedListen(l.Addr(), err)
+	} else {
+		a.attemptedListen(nil, err)
 	}
 
-	a.logNot("proxy: listener started successfully at ", l.Addr().String())
+	if err != nil {
+		return
+	}
 
 	// [sync.Once] for closing the listener.
 	var closeLOnce sync.Once
@@ -249,12 +151,10 @@ func (a *App) Run(ctx context.Context) error {
 	// Remove code duplication of using [sync.Once.Go].
 	closeListener := func() {
 		err := l.Close()
-		if errors.Is(err, net.ErrClosed) {
-			ret = a.joinErr(ret, ErrLRepeatedClose)
-		} else if err != nil {
-			ret = a.joinErr(ret, err)
+		if l != nil {
+			a.closedListener(l.Addr(), err)
 		} else {
-			a.logNot("proxy: listener closed successfully")
+			a.closedListener(nil, err)
 		}
 	}
 
@@ -272,62 +172,60 @@ func (a *App) Run(ctx context.Context) error {
 			// Non-blocking select for context cancellation.
 			select {
 			case <-ctx.Done():
-				break
+				return
 			default:
 			}
 
 			// Blocking accept.
 			srcConn, err := l.Accept()
-			if errors.Is(err, net.ErrClosed) {
-				// Benign case of listener closed from somewhere else.
-				return
-			} else if err != nil {
-				// Actual unexpected error.
-				ret = a.joinErr(ret, err)
+
+			if srcConn != nil {
+				a.attemptedAccept(srcConn.LocalAddr(), srcConn.RemoteAddr(), err)
+			} else {
+				a.attemptedAccept(nil, nil, err)
+			}
+
+			if err != nil {
 				return
 			}
 
-			a.incConnCount()
-
 			// Use this function to close both the source and destination connections.
-			closeConn := func(conn net.Conn) {
+			closeConn := func(uuid string, conn net.Conn) {
 				err := conn.Close()
-				if errors.Is(err, net.ErrClosed) {
-					ret = a.joinErr(ret, ErrCRepeatedClose)
-				} else if errors.Is(err, io.EOF) {
-					ret = a.joinErr(ret, ErrPeerClose)
-				} else if err != nil {
-					ret = a.joinErr(ret, err)
+				if conn != nil {
+					a.closedConn(uuid, conn.LocalAddr(), conn.RemoteAddr(), err)
 				} else {
-					a.decConnCount()
-					a.logNot("Connection with ", conn.RemoteAddr().String(), " closed")
+					a.closedConn(uuid, nil, nil, err)
 				}
 			}
 
 			// Close source connection only once.
 			var closeSrcCOnce sync.Once
-			closeSrcConn := func() {
-				a.logNot("Closing source connection")
-				closeConn(srcConn)
-			}
+			closeSrcConn := func() { closeConn("", srcConn) }
 
 			// Defer closing the connection if listener closes by another goroutine.
 			defer closeSrcCOnce.Do(closeSrcConn)
 
 			// Validate connection source.
-			if a.c.SrcIP.String() != "0.0.0.0" && strings.Split(srcConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
+			if a.c.SrcIP.String() != "0.0.0.0" && // do not validate if "0.0.0.0"
+				strings.Split(srcConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
+				a.failedSrcConn(srcConn.LocalAddr(), a.c.SrcIP.String())
 				closeSrcCOnce.Do(closeSrcConn)
-				a.logNot("New connection from ", srcConn.RemoteAddr().String(), " rejected due to not matching ", a.c.SrcIP.String())
 				continue
 			}
 
-			a.logNot("New connection from ", srcConn.RemoteAddr().String(), " accepted, connecting to ", a.c.DstAddr)
+			a.validatedSrcConn(srcConn.LocalAddr(), a.c.SrcIP.String())
 
 			// Connect to destination address.
 			dstConn, err := net.Dial("tcp", a.c.DstAddr)
 
+			if dstConn != nil {
+				a.attemptedDial(dstConn.LocalAddr(), dstConn.RemoteAddr(), err)
+			} else {
+				a.attemptedDial(nil, nil, err)
+			}
+
 			if err != nil {
-				ret = a.joinErr(ret, err)
 				closeSrcCOnce.Do(closeSrcConn)
 				continue
 			}
@@ -335,13 +233,16 @@ func (a *App) Run(ctx context.Context) error {
 			// Assign a UUID to this successful proxy connection.
 			connUUID := uuid.New().String()
 
-			a.logNot("Successfully connected ", srcConn.RemoteAddr().String(), " to ", a.c.DstAddr, " as ", connUUID)
+			a.gotConnPair(connUUID, srcConn.LocalAddr(), srcConn.RemoteAddr(), dstConn.LocalAddr(), dstConn.RemoteAddr())
+
+			// Defers are LIFO, so close the source connection with UUID instead of without.
+			closeSrcConn = func() { closeConn(connUUID, srcConn) }
+			defer closeSrcCOnce.Do(closeSrcConn)
 
 			// Close destination connection only once.
 			var closeDstCOnce sync.Once
 			closeDstConn := func() {
-				a.logNot("Closing destination connection")
-				closeConn(dstConn)
+				closeConn(connUUID, dstConn)
 			}
 
 			defer closeDstCOnce.Do(closeDstConn)
@@ -369,16 +270,8 @@ func (a *App) Run(ctx context.Context) error {
 					hW := newHexWriter(a, connUUID, srcConn.RemoteAddr(), dstConn.RemoteAddr())
 					teeR := io.TeeReader(srcConn, hW)
 					bytesWritten, err := io.Copy(dstConn, teeR)
+					a.attemptedIOCopy(connUUID, bytesWritten, err, srcConn.LocalAddr(), srcConn.RemoteAddr(), dstConn.LocalAddr(), dstConn.RemoteAddr())
 
-					if errors.Is(err, net.ErrClosed) {
-						ret = a.joinErr(ret, ErrCRepeatedClose) // TODO: this should not be part of ret, or the if should not be here
-					} else if errors.Is(err, io.EOF) {
-						panic("io.Copy returned EOF error") // never happens according to official docs
-					} else if err != nil {
-						ret = a.joinErr(ret, err)
-					}
-
-					a.logInf("[", connUUID, "]: ", bytesWritten, " total bytes written from ", srcConn.RemoteAddr().String(), " to ", dstConn.RemoteAddr().String())
 				})
 
 				// Relay all bytes from destination connection to source connection.
@@ -389,16 +282,7 @@ func (a *App) Run(ctx context.Context) error {
 					hW := newHexWriter(a, connUUID, dstConn.RemoteAddr(), srcConn.RemoteAddr())
 					teeR := io.TeeReader(dstConn, hW)
 					bytesWritten, err := io.Copy(srcConn, teeR)
-
-					if errors.Is(err, net.ErrClosed) {
-						ret = a.joinErr(ret, ErrCRepeatedClose) // TODO: this should not be part of ret, or the if should not be here
-					} else if errors.Is(err, io.EOF) {
-						panic("io.Copy returned EOF error") // never happens according to official docs
-					} else if err != nil {
-						ret = a.joinErr(ret, err)
-					}
-
-					a.logInf("[", connUUID, "]: ", bytesWritten, " total bytes written from ", dstConn.RemoteAddr().String(), " to ", srcConn.RemoteAddr().String())
+					a.attemptedIOCopy(connUUID, bytesWritten, err, dstConn.LocalAddr(), dstConn.RemoteAddr(), srcConn.LocalAddr(), srcConn.RemoteAddr())
 				})
 
 				// Wait for both byte-relaying goroutines to complete.
@@ -417,6 +301,4 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Wait for the listener and the source + destination pairing goroutines to complete.
 	rootWg.Wait()
-
-	return ret
 }
