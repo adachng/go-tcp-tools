@@ -51,18 +51,18 @@ var (
 	// Invalid port number specified.
 	ErrInvalidPort = errors.New("proxy: listener port is invalid")
 
-	// Invalid source IPv4 address used to filter out.
-	ErrSrcIP = errors.New("proxy: invalid source IPv4 address (not in form \"123.456.789.012\")")
+	// Invalid inbound IPv4 remote address used to filter out.
+	ErrInbIP = errors.New("proxy: invalid inbound IPv4 address (not in form \"123.456.789.012\")")
 
-	// Invalid destination address.
-	ErrDstAddr = errors.New("proxy: invalid destination address (not in form \"123.456.789.012:1234\")")
+	// Invalid outbound address.
+	ErrOutbAddr = errors.New("proxy: invalid outbound address with port (not in form \"123.456.789.012:1234\")")
 )
 
 type Config struct {
 	// Inbound connection filter.
 	SrcIP net.IP
 
-	// Outbound connection destination address in the form of "192.168.0.1:1234".
+	// Outbound connection address in the form of "192.168.0.1:1234".
 	DstAddr string
 
 	// The port number that the proxy server listens on.
@@ -85,13 +85,13 @@ func New(c Config, s EventListener) (*App, error) {
 	}
 
 	if c.SrcIP == nil {
-		err = errors.Join(err, ErrSrcIP)
+		err = errors.Join(err, ErrInbIP)
 	}
 
 	strs := strings.Split(c.DstAddr, ":")
 	ip := strs[0]
 	if c.DstAddr == "" || len(strs) != 2 || net.ParseIP(ip) == nil {
-		err = errors.Join(err, ErrDstAddr)
+		err = errors.Join(err, ErrOutbAddr)
 	}
 
 	if err == nil {
@@ -107,7 +107,7 @@ func New(c Config, s EventListener) (*App, error) {
 func (a *App) Run(ctx context.Context) {
 	// Validate config.
 	if a.c.SrcIP == nil {
-		a.gotError("", ErrSrcIP)
+		a.gotError("", ErrInbIP)
 		return
 	}
 	if a.c.ListenPort <= 0 {
@@ -119,13 +119,13 @@ func (a *App) Run(ctx context.Context) {
 	{
 		strs := strings.Split(a.c.DstAddr, ":")
 		if len(strs) != 2 {
-			a.gotError("", ErrDstAddr)
+			a.gotError("", ErrOutbAddr)
 			return
 		}
 
 		ip := strs[0]
 		if net.ParseIP(ip) == nil {
-			a.gotError("", ErrDstAddr)
+			a.gotError("", ErrOutbAddr)
 			return
 		}
 	}
@@ -177,10 +177,10 @@ func (a *App) Run(ctx context.Context) {
 			}
 
 			// Blocking accept.
-			srcConn, err := l.Accept()
+			inbConn, err := l.Accept()
 
-			if srcConn != nil {
-				a.attemptedAccept(srcConn.LocalAddr(), srcConn.RemoteAddr(), err)
+			if inbConn != nil {
+				a.attemptedAccept(inbConn.LocalAddr(), inbConn.RemoteAddr(), err)
 			} else {
 				a.attemptedAccept(nil, nil, err)
 			}
@@ -189,7 +189,7 @@ func (a *App) Run(ctx context.Context) {
 				return
 			}
 
-			// Use this function to close both the source and destination connections.
+			// Use this function to close both the inbound and outbound connections.
 			closeConn := func(uuid string, conn net.Conn) {
 				err := conn.Close()
 				if conn != nil {
@@ -199,58 +199,58 @@ func (a *App) Run(ctx context.Context) {
 				}
 			}
 
-			// Close source connection only once.
-			var closeSrcCOnce sync.Once
-			closeSrcConn := func() { closeConn("", srcConn) }
+			// Close inbound connection only once.
+			var closeInbCOnce sync.Once
+			closeInbConn := func() { closeConn("", inbConn) }
 
 			// Defer closing the connection if listener closes by another goroutine.
-			defer closeSrcCOnce.Do(closeSrcConn)
+			defer closeInbCOnce.Do(closeInbConn)
 
-			// Validate connection source.
+			// Validate inbound connection's remote address.
 			if a.c.SrcIP.String() != "0.0.0.0" && // do not validate if "0.0.0.0"
-				strings.Split(srcConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
-				a.failedSrcConn(srcConn.LocalAddr(), a.c.SrcIP.String())
-				closeSrcCOnce.Do(closeSrcConn)
+				strings.Split(inbConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
+				a.failedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
+				closeInbCOnce.Do(closeInbConn)
 				continue
 			}
 
-			a.validatedSrcConn(srcConn.LocalAddr(), a.c.SrcIP.String())
+			a.validatedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
 
-			// Connect to destination address.
-			dstConn, err := net.Dial("tcp", a.c.DstAddr)
+			// Connect to specified address (outbound connection).
+			outbConn, err := net.Dial("tcp", a.c.DstAddr)
 
-			if dstConn != nil {
-				a.attemptedDial(dstConn.LocalAddr(), dstConn.RemoteAddr(), err)
+			if outbConn != nil {
+				a.attemptedDial(outbConn.LocalAddr(), outbConn.RemoteAddr(), err)
 			} else {
 				a.attemptedDial(nil, nil, err)
 			}
 
 			if err != nil {
-				closeSrcCOnce.Do(closeSrcConn)
+				closeInbCOnce.Do(closeInbConn)
 				continue
 			}
 
 			// Assign a UUID to this successful proxy connection.
 			connUUID := uuid.New().String()
 
-			a.gotConnPair(connUUID, srcConn.LocalAddr(), srcConn.RemoteAddr(), dstConn.LocalAddr(), dstConn.RemoteAddr())
+			a.gotConnPair(connUUID, inbConn.LocalAddr(), inbConn.RemoteAddr(), outbConn.LocalAddr(), outbConn.RemoteAddr())
 
-			// Defers are LIFO, so close the source connection with UUID instead of without.
-			closeSrcConn = func() { closeConn(connUUID, srcConn) }
-			defer closeSrcCOnce.Do(closeSrcConn)
+			// Defers are LIFO, so close the inbound connection with UUID instead of without UUID.
+			closeInbConn = func() { closeConn(connUUID, inbConn) }
+			defer closeInbCOnce.Do(closeInbConn)
 
-			// Close destination connection only once.
-			var closeDstCOnce sync.Once
-			closeDstConn := func() {
-				closeConn(connUUID, dstConn)
+			// Close outbound connection only once.
+			var closeOutbCOnce sync.Once
+			closeOutbConn := func() {
+				closeConn(connUUID, outbConn)
 			}
 
-			defer closeDstCOnce.Do(closeDstConn)
+			defer closeOutbCOnce.Do(closeOutbConn)
 
 			rootWg.Go(func() {
 				// Defer closing the connections if any of the connections closes by remote peer or another goroutine.
-				defer closeSrcCOnce.Do(closeSrcConn)
-				defer closeDstCOnce.Do(closeDstConn)
+				defer closeInbCOnce.Do(closeInbConn)
+				defer closeOutbCOnce.Do(closeOutbConn)
 
 				// One non-blocking select for context cancellation.
 				select {
@@ -262,27 +262,27 @@ func (a *App) Run(ctx context.Context) {
 				// Note that [io.Copy] will never return error [io.EOF].
 				var wg sync.WaitGroup
 
-				// Relay all bytes from source connection to destination connection.
+				// Relay all bytes from inbound connection to outbound connection.
 				wg.Go(func() {
-					defer closeSrcCOnce.Do(closeSrcConn)
-					defer closeDstCOnce.Do(closeDstConn)
+					defer closeInbCOnce.Do(closeInbConn)
+					defer closeOutbCOnce.Do(closeOutbConn)
 
-					hW := newHexWriter(a, connUUID, srcConn.RemoteAddr(), dstConn.RemoteAddr())
-					teeR := io.TeeReader(srcConn, hW)
-					bytesWritten, err := io.Copy(dstConn, teeR)
-					a.attemptedIOCopy(connUUID, bytesWritten, err, srcConn.LocalAddr(), srcConn.RemoteAddr(), dstConn.LocalAddr(), dstConn.RemoteAddr())
+					hW := newHexWriter(a, connUUID, inbConn.RemoteAddr(), outbConn.RemoteAddr())
+					teeR := io.TeeReader(inbConn, hW)
+					bytesWritten, err := io.Copy(outbConn, teeR)
+					a.attemptedIOCopy(connUUID, bytesWritten, err, inbConn.LocalAddr(), inbConn.RemoteAddr(), outbConn.LocalAddr(), outbConn.RemoteAddr())
 
 				})
 
-				// Relay all bytes from destination connection to source connection.
+				// Relay all bytes from outbound connection to inbound connection.
 				wg.Go(func() {
-					defer closeSrcCOnce.Do(closeSrcConn)
-					defer closeDstCOnce.Do(closeDstConn)
+					defer closeInbCOnce.Do(closeInbConn)
+					defer closeOutbCOnce.Do(closeOutbConn)
 
-					hW := newHexWriter(a, connUUID, dstConn.RemoteAddr(), srcConn.RemoteAddr())
-					teeR := io.TeeReader(dstConn, hW)
-					bytesWritten, err := io.Copy(srcConn, teeR)
-					a.attemptedIOCopy(connUUID, bytesWritten, err, dstConn.LocalAddr(), dstConn.RemoteAddr(), srcConn.LocalAddr(), srcConn.RemoteAddr())
+					hW := newHexWriter(a, connUUID, outbConn.RemoteAddr(), inbConn.RemoteAddr())
+					teeR := io.TeeReader(outbConn, hW)
+					bytesWritten, err := io.Copy(inbConn, teeR)
+					a.attemptedIOCopy(connUUID, bytesWritten, err, outbConn.LocalAddr(), outbConn.RemoteAddr(), inbConn.LocalAddr(), inbConn.RemoteAddr())
 				})
 
 				// Wait for both byte-relaying goroutines to complete.
@@ -299,6 +299,6 @@ func (a *App) Run(ctx context.Context) {
 	// Close listener which triggers closing of all the connections associated with the listener, which should close the child goroutines.
 	closeLOnce.Do(closeListener)
 
-	// Wait for the listener and the source + destination pairing goroutines to complete.
+	// Wait for the listener and the inbound + outbound pair goroutines to complete.
 	rootWg.Wait()
 }

@@ -86,7 +86,7 @@ func (l *listener) AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
 	}
 }
 
-func (l *listener) FailedSrcConn(rAddr net.Addr, match string) {
+func (l *listener) FailedInbConn(rAddr net.Addr, match string) {
 	rAddrStr := ""
 	if rAddr != nil {
 		rAddrStr = "from " + rAddr.String() + " "
@@ -95,7 +95,7 @@ func (l *listener) FailedSrcConn(rAddr net.Addr, match string) {
 	logx.Default().Notice("Inbound connection ", rAddrStr, "rejected (does not match ", match, ")")
 }
 
-func (l *listener) ValidatedSrcConn(rAddr net.Addr, match string) {
+func (l *listener) ValidatedInbConn(rAddr net.Addr, match string) {
 	rAddrStr := ""
 	if rAddr != nil {
 		rAddrStr = "from " + rAddr.String() + " "
@@ -122,13 +122,13 @@ func (l *listener) AttemptedDial(lAddr net.Addr, rAddr net.Addr, err error) {
 	}
 }
 
-func (l *listener) GotConnPair(uuid string, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
+func (l *listener) GotConnPair(uuid string, inbLAddr net.Addr, inbRAddr net.Addr, outbLAddr net.Addr, outbRAddr net.Addr) {
 	prefix := ""
 	if uuid != "" {
 		prefix = "[" + uuid + "] "
 	}
 
-	logx.Default().Notice(prefix, "Proxy connection established:\n\t", srcRAddr.String(), " > ", srcLAddr.String(), " > ", dstLAddr.String(), " > ", dstRAddr.String())
+	logx.Default().Notice(prefix, "Proxy connection established:\n\t", inbRAddr.String(), " > ", inbLAddr.String(), " > ", outbLAddr.String(), " > ", outbRAddr.String())
 }
 
 func (l *listener) RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAddr net.Addr) {

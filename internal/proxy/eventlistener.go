@@ -46,24 +46,24 @@ type EventListener interface {
 	// Called each time after [net.Accept] is called.
 	AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error)
 
-	// Called after failing validation of the source inbound connection origin address.
-	FailedSrcConn(rAddr net.Addr, match string)
+	// Called after failing validation of the inbound connection's remote address.
+	FailedInbConn(rAddr net.Addr, match string)
 
-	// Called after successful validation that the source inbound connection originates from allowed address.
-	ValidatedSrcConn(rAddr net.Addr, match string)
+	// Called after successful validation of the inbound connection's remote address.
+	ValidatedInbConn(rAddr net.Addr, match string)
 
-	// Called each time after [net.Dial] is called with the connection's local and remote address as input.
+	// Called each time after [net.Dial] is called with the outbound connection's local and remote address as input.
 	AttemptedDial(lAddr net.Addr, rAddr net.Addr, err error)
 
-	// Called after successfully establishing connection pair
-	// (after sucessful validation of source connection and successful connection to proxy destination).
-	GotConnPair(uuid string, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr)
+	// Called after successfully establishing connection pair after sucessful validation of inbound
+	// connection's remote address and successful outbound connection.
+	GotConnPair(uuid string, inbLAddr net.Addr, srcRAddr net.Addr, outbLAddr net.Addr, dstRAddr net.Addr)
 
 	// Called via the [io.TeeReader]'s [io.Writer] implementation.
 	RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAddr net.Addr)
 
 	// Called after [io.Copy] returns. The source connection referred here
-	// is the source of the bytes, not the inbound.
+	// is the source of the bytes in the copy, not the inbound connection.
 	AttemptedIOCopy(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr)
 
 	// Called each time after [net.Conn.Close] is called. May be associated with UUID (ignore if == "").
@@ -76,10 +76,10 @@ type EventListener interface {
 // Implements [io.Writer] for [io.TeeReader] to log all bytes relayed in hex.
 type hexWriter struct {
 	a    *App
-	uuid string // UUID of the source and destination connections instance
+	uuid string // UUID of the inbound and outbound connection pair
 
-	srcAddr net.Addr // not to be confused with source connection; the source of bytes to write
-	dstAddr net.Addr // not to be confused with source connection; the destination of bytes to write to
+	srcAddr net.Addr // the remote address of the source of the bytes (may either be the inbound or outbound connection)
+	dstAddr net.Addr // the remote address of the destination of the bytes (may either be the inbound or outbound connection)
 }
 
 func newHexWriter(a *App, uuid string, srcA net.Addr, dstA net.Addr) hexWriter {
@@ -118,15 +118,15 @@ func (a *App) attemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
 	}
 }
 
-func (a *App) failedSrcConn(rAddr net.Addr, match string) {
+func (a *App) failedInbConn(rAddr net.Addr, match string) {
 	if a.subscriber != nil {
-		a.subscriber.FailedSrcConn(rAddr, match)
+		a.subscriber.FailedInbConn(rAddr, match)
 	}
 }
 
-func (a *App) validatedSrcConn(rAddr net.Addr, match string) {
+func (a *App) validatedInbConn(rAddr net.Addr, match string) {
 	if a.subscriber != nil {
-		a.subscriber.ValidatedSrcConn(rAddr, match)
+		a.subscriber.ValidatedInbConn(rAddr, match)
 	}
 }
 
@@ -136,9 +136,9 @@ func (a *App) attemptedDial(lAddr net.Addr, rAddr net.Addr, err error) {
 	}
 }
 
-func (a *App) gotConnPair(uuid string, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
+func (a *App) gotConnPair(uuid string, inbLAddr net.Addr, srcRAddr net.Addr, outbLAddr net.Addr, dstRAddr net.Addr) {
 	if a.subscriber != nil {
-		a.subscriber.GotConnPair(uuid, srcLAddr, srcRAddr, dstLAddr, dstRAddr)
+		a.subscriber.GotConnPair(uuid, inbLAddr, srcRAddr, outbLAddr, dstRAddr)
 	}
 }
 
