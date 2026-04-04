@@ -30,8 +30,8 @@ import (
 )
 
 type connPair struct {
-	closeConnFunc       func(uuid string, conn net.Conn)
-	attemptedIOCopyFunc func() func(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr)
+	h             *eventHandle
+	closeConnFunc func(uuid string, conn net.Conn)
 
 	uuid string
 	wg   sync.WaitGroup
@@ -47,8 +47,8 @@ type connPair struct {
 }
 
 func newConnPair(
+	h *eventHandle,
 	closeConnFunc func(uuid string, conn net.Conn),
-	attemptedIOCopyFunc func() func(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr),
 	uuid string,
 	inbConn net.Conn,
 	inbToOutbHW *hexWriter,
@@ -56,13 +56,13 @@ func newConnPair(
 	outbToInbHW *hexWriter,
 ) *connPair {
 	return &connPair{
-		closeConnFunc:       closeConnFunc,
-		attemptedIOCopyFunc: attemptedIOCopyFunc,
-		uuid:                uuid,
-		inbConn:             inbConn,
-		inbToOutbHW:         inbToOutbHW,
-		outbConn:            outbConn,
-		outbToInbHW:         outbToInbHW,
+		h:             h,
+		closeConnFunc: closeConnFunc,
+		uuid:          uuid,
+		inbConn:       inbConn,
+		inbToOutbHW:   inbToOutbHW,
+		outbConn:      outbConn,
+		outbToInbHW:   outbToInbHW,
 	}
 }
 
@@ -92,9 +92,7 @@ func (c *connPair) run(ctx context.Context) {
 
 		teeR := io.TeeReader(c.inbConn, c.inbToOutbHW)
 		bytesWritten, err := io.Copy(c.outbConn, teeR)
-		if c.attemptedIOCopyFunc != nil && c.attemptedIOCopyFunc() != nil {
-			c.attemptedIOCopyFunc()(c.uuid, bytesWritten, err, c.inbConn.LocalAddr(), c.inbConn.RemoteAddr(), c.outbConn.LocalAddr(), c.outbConn.RemoteAddr())
-		}
+		c.h.listener().AttemptedIOCopy(c.uuid, bytesWritten, err, c.inbConn.LocalAddr(), c.inbConn.RemoteAddr(), c.outbConn.LocalAddr(), c.outbConn.RemoteAddr())
 	})
 
 	// Relay all bytes from outbound connection to inbound connection.
@@ -104,9 +102,7 @@ func (c *connPair) run(ctx context.Context) {
 
 		teeR := io.TeeReader(c.outbConn, c.outbToInbHW)
 		bytesWritten, err := io.Copy(c.inbConn, teeR)
-		if c.attemptedIOCopyFunc != nil && c.attemptedIOCopyFunc() != nil {
-			c.attemptedIOCopyFunc()(c.uuid, bytesWritten, err, c.outbConn.LocalAddr(), c.outbConn.RemoteAddr(), c.inbConn.LocalAddr(), c.inbConn.RemoteAddr())
-		}
+		c.h.listener().AttemptedIOCopy(c.uuid, bytesWritten, err, c.outbConn.LocalAddr(), c.outbConn.RemoteAddr(), c.inbConn.LocalAddr(), c.inbConn.RemoteAddr())
 	})
 
 	// Wait for both byte-relaying goroutines to complete.

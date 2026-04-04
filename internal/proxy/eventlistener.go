@@ -24,6 +24,7 @@ package proxy
 
 import (
 	"net"
+	"sync/atomic"
 )
 
 // Interface for events. The methods are made to be near-impossible to mutate the [App] instance.
@@ -73,24 +74,61 @@ type EventListener interface {
 	ClosedListener(lAddr net.Addr, err error)
 }
 
+type eventHandle struct {
+	evList atomic.Value
+}
+
+type noopEventListener struct{}
+
+func (noopEventListener) GotError(uuid string, err error)                           {}
+func (noopEventListener) AttemptedListen(lAddr net.Addr, err error)                 {}
+func (noopEventListener) AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {}
+func (noopEventListener) FailedInbConn(rAddr net.Addr, match string)                {}
+func (noopEventListener) ValidatedInbConn(rAddr net.Addr, match string)             {}
+func (noopEventListener) AttemptedDial(lAddr net.Addr, rAddr net.Addr, err error)   {}
+func (noopEventListener) GotConnPair(uuid string, inbLAddr net.Addr, srcRAddr net.Addr, outbLAddr net.Addr, dstRAddr net.Addr) {
+}
+func (noopEventListener) RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAddr net.Addr) {}
+func (noopEventListener) AttemptedIOCopy(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
+}
+func (noopEventListener) ClosedConn(uuid string, lAddr net.Addr, rAddr net.Addr, err error) {}
+func (noopEventListener) ClosedListener(lAddr net.Addr, err error)                          {}
+
+func newEventHandle(e EventListener) *eventHandle {
+	ret := &eventHandle{}
+	ret.evList.Store(e)
+	return ret
+}
+
+func (e *eventHandle) listener() EventListener {
+	if l := e.evList.Load(); l != nil {
+		return l.(EventListener)
+	}
+	return noopEventListener{}
+}
+
+func (e *eventHandle) setListener(evList EventListener) {
+	e.evList.Store(evList)
+}
+
 // Implements [io.Writer] for [io.TeeReader] to log all bytes relayed in hex.
 type hexWriter struct {
-	relayedBytesEvent func() func(uuid string, b []byte, srcAddr net.Addr, dstAddr net.Addr) // function that returns a function for concurrent-safe proxy event subscriber
-	uuid              string                                                                 // UUID of the inbound and outbound connection pair
+	evH  *eventHandle
+	uuid string // UUID of the inbound and outbound connection pair
 
 	srcAddr net.Addr // the remote address of the source of the bytes (may either be the inbound or outbound connection)
 	dstAddr net.Addr // the remote address of the destination of the bytes (may either be the inbound or outbound connection)
 }
 
 func newHexWriter(
-	relayedBytesEvent func() func(uuid string, b []byte, srcAddr net.Addr, dstAddr net.Addr),
+	evH *eventHandle,
 	uuid string,
 	srcA net.Addr,
 	dstA net.Addr,
 ) hexWriter {
 	return hexWriter{
-		relayedBytesEvent: relayedBytesEvent,
-		uuid:              uuid,
+		evH:  evH,
+		uuid: uuid,
 
 		srcAddr: srcA,
 		dstAddr: dstA,
@@ -98,69 +136,7 @@ func newHexWriter(
 }
 
 func (h hexWriter) Write(b []byte) (n int, err error) {
-	if h.relayedBytesEvent != nil && h.relayedBytesEvent() != nil {
-		h.relayedBytesEvent()(h.uuid, b, h.srcAddr, h.dstAddr)
-	}
+	h.evH.listener().RelayedBytes(h.uuid, b, h.srcAddr, h.dstAddr)
 
 	return len(b), nil
-}
-
-func (a *App) gotError(uuid string, err error) {
-	if a.subscriber != nil {
-		a.subscriber.GotError(uuid, err)
-	}
-}
-
-func (a *App) attemptedListen(lAddr net.Addr, err error) {
-	if a.subscriber != nil {
-		a.subscriber.AttemptedListen(lAddr, err)
-	}
-}
-
-func (a *App) attemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
-	if a.subscriber != nil {
-		a.subscriber.AttemptedAccept(lAddr, rAddr, err)
-	}
-}
-
-func (a *App) failedInbConn(rAddr net.Addr, match string) {
-	if a.subscriber != nil {
-		a.subscriber.FailedInbConn(rAddr, match)
-	}
-}
-
-func (a *App) validatedInbConn(rAddr net.Addr, match string) {
-	if a.subscriber != nil {
-		a.subscriber.ValidatedInbConn(rAddr, match)
-	}
-}
-
-func (a *App) attemptedDial(lAddr net.Addr, rAddr net.Addr, err error) {
-	if a.subscriber != nil {
-		a.subscriber.AttemptedDial(lAddr, rAddr, err)
-	}
-}
-
-func (a *App) gotConnPair(uuid string, inbLAddr net.Addr, srcRAddr net.Addr, outbLAddr net.Addr, dstRAddr net.Addr) {
-	if a.subscriber != nil {
-		a.subscriber.GotConnPair(uuid, inbLAddr, srcRAddr, outbLAddr, dstRAddr)
-	}
-}
-
-func (a *App) attemptedIOCopy(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
-	if a.subscriber != nil {
-		a.subscriber.AttemptedIOCopy(uuid, bytesWritten, err, srcLAddr, srcRAddr, dstLAddr, dstRAddr)
-	}
-}
-
-func (a *App) closedConn(uuid string, lAddr net.Addr, rAddr net.Addr, err error) {
-	if a.subscriber != nil {
-		a.subscriber.ClosedConn(uuid, lAddr, rAddr, err)
-	}
-}
-
-func (a *App) closedListener(lAddr net.Addr, err error) {
-	if a.subscriber != nil {
-		a.subscriber.ClosedListener(lAddr, err)
-	}
 }

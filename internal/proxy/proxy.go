@@ -71,8 +71,7 @@ type Config struct {
 // [App] structure of the entire [proxy] package.
 type App struct {
 	c Config
-
-	subscriber EventListener // TODO: make atomic to make hot-swappable
+	h *eventHandle
 
 	rootWg     sync.WaitGroup // listener main loop and all paired connection instances
 	closeLOnce sync.Once      // close the listener only once
@@ -98,22 +97,26 @@ func New(c Config, s EventListener) (*App, error) {
 
 	if err == nil {
 		return &App{
-			c:          c,
-			subscriber: s,
+			h: newEventHandle(s),
+			c: c,
 		}, nil
 	}
 
 	return nil, err
 }
 
+func (a *App) SetEventListener(s EventListener) {
+	a.h.setListener(s)
+}
+
 func (a *App) Run(ctx context.Context) {
 	// Validate config.
 	if a.c.SrcIP == nil {
-		a.gotError("", ErrInbIP)
+		a.h.listener().GotError("", ErrInbIP)
 		return
 	}
 	if a.c.ListenPort <= 0 {
-		a.gotError("", ErrInvalidPort)
+		a.h.listener().GotError("", ErrInvalidPort)
 		return
 	}
 
@@ -121,13 +124,13 @@ func (a *App) Run(ctx context.Context) {
 	{
 		strs := strings.Split(a.c.DstAddr, ":")
 		if len(strs) != 2 {
-			a.gotError("", ErrOutbAddr)
+			a.h.listener().GotError("", ErrOutbAddr)
 			return
 		}
 
 		ip := strs[0]
 		if net.ParseIP(ip) == nil {
-			a.gotError("", ErrOutbAddr)
+			a.h.listener().GotError("", ErrOutbAddr)
 			return
 		}
 	}
@@ -138,9 +141,9 @@ func (a *App) Run(ctx context.Context) {
 	l, err := net.Listen("tcp", ":"+strconv.FormatUint(lPort, 10))
 
 	if l != nil {
-		a.attemptedListen(l.Addr(), err)
+		a.h.listener().AttemptedListen(l.Addr(), err)
 	} else {
-		a.attemptedListen(nil, err)
+		a.h.listener().AttemptedListen(nil, err)
 	}
 
 	if err != nil {
@@ -151,9 +154,9 @@ func (a *App) Run(ctx context.Context) {
 	closeListener := func() {
 		err := l.Close()
 		if l != nil {
-			a.closedListener(l.Addr(), err)
+			a.h.listener().ClosedListener(l.Addr(), err)
 		} else {
-			a.closedListener(nil, err)
+			a.h.listener().ClosedListener(nil, err)
 		}
 	}
 
@@ -177,9 +180,9 @@ func (a *App) Run(ctx context.Context) {
 
 			// If err is not nil, inbConn is nil.
 			if inbConn != nil {
-				a.attemptedAccept(inbConn.LocalAddr(), inbConn.RemoteAddr(), err)
+				a.h.listener().AttemptedAccept(inbConn.LocalAddr(), inbConn.RemoteAddr(), err)
 			} else {
-				a.attemptedAccept(nil, nil, err)
+				a.h.listener().AttemptedAccept(nil, nil, err)
 			}
 
 			if err != nil {
@@ -190,29 +193,29 @@ func (a *App) Run(ctx context.Context) {
 			closeConn := func(uuid string, conn net.Conn) {
 				err := conn.Close()
 				if conn != nil {
-					a.closedConn(uuid, conn.LocalAddr(), conn.RemoteAddr(), err)
+					a.h.listener().ClosedConn(uuid, conn.LocalAddr(), conn.RemoteAddr(), err)
 				} else {
-					a.closedConn(uuid, nil, nil, err)
+					a.h.listener().ClosedConn(uuid, nil, nil, err)
 				}
 			}
 
 			// Validate inbound connection's remote address.
 			if a.c.SrcIP.String() != "0.0.0.0" && // do not validate if "0.0.0.0"
 				strings.Split(inbConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
-				a.failedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
+				a.h.listener().FailedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
 				closeConn("", inbConn)
 				continue
 			}
 
-			a.validatedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
+			a.h.listener().ValidatedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
 
 			// Connect to specified address (outbound connection).
 			outbConn, err := net.Dial("tcp", a.c.DstAddr)
 
 			if outbConn != nil {
-				a.attemptedDial(outbConn.LocalAddr(), outbConn.RemoteAddr(), err)
+				a.h.listener().AttemptedDial(outbConn.LocalAddr(), outbConn.RemoteAddr(), err)
 			} else {
-				a.attemptedDial(nil, nil, err)
+				a.h.listener().AttemptedDial(nil, nil, err)
 			}
 
 			if err != nil {
@@ -223,26 +226,12 @@ func (a *App) Run(ctx context.Context) {
 			// Assign a UUID to this successful proxy connection.
 			connUUID := uuid.New().String()
 
-			// Instantiate hexWriter instances for connPair.
-			getFuncForHW := func() func(uuid string, b []byte, srcAddr net.Addr, dstAddr net.Addr) {
-				// TODO: atomic load here.
-				if a.subscriber != nil {
-					return a.subscriber.RelayedBytes
-				}
-				return nil
-			}
-
-			getAttemptedIOCopyFunc := func() func(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
-				// TODO: atomic load here.
-				return a.attemptedIOCopy
-			}
-
-			inbToOutbHW := newHexWriter(getFuncForHW, connUUID, inbConn.RemoteAddr(), outbConn.RemoteAddr())
-			OutbToInbHW := newHexWriter(getFuncForHW, connUUID, outbConn.RemoteAddr(), inbConn.RemoteAddr())
+			inbToOutbHW := newHexWriter(a.h, connUUID, inbConn.RemoteAddr(), outbConn.RemoteAddr())
+			OutbToInbHW := newHexWriter(a.h, connUUID, outbConn.RemoteAddr(), inbConn.RemoteAddr())
 
 			// Instantiate connPair instances.
-			connPair := newConnPair(closeConn, getAttemptedIOCopyFunc, connUUID, inbConn, &inbToOutbHW, outbConn, &OutbToInbHW)
-			a.gotConnPair(connUUID, inbConn.LocalAddr(), inbConn.RemoteAddr(), outbConn.LocalAddr(), outbConn.RemoteAddr())
+			connPair := newConnPair(a.h, closeConn, connUUID, inbConn, &inbToOutbHW, outbConn, &OutbToInbHW)
+			a.h.listener().GotConnPair(connUUID, inbConn.LocalAddr(), inbConn.RemoteAddr(), outbConn.LocalAddr(), outbConn.RemoteAddr())
 
 			// Defer the closing of inbound and outbound connections here to increase reactivity of shutting down proxy.
 			closeInbOnce, closeOutbOnce := connPair.getSyncOnce()
