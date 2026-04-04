@@ -232,7 +232,7 @@ func main() {
 	// Configure the call depth to be inside the proxy package.
 	{
 		c := logx.Default().GetConfig()
-		c.CallDepth += 2
+		c.CallDepth += 1
 		logx.Default().Configure(c)
 	}
 
