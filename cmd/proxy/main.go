@@ -224,6 +224,7 @@ func main() {
 	app, err := proxy.New(c, &l)
 	if err != nil {
 		printUsage(err)
+		return
 	}
 
 	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill, syscall.SIGTERM)
