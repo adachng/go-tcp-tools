@@ -75,17 +75,22 @@ type EventListener interface {
 
 // Implements [io.Writer] for [io.TeeReader] to log all bytes relayed in hex.
 type hexWriter struct {
-	a    *App
-	uuid string // UUID of the inbound and outbound connection pair
+	relayedBytesEvent func() func(uuid string, b []byte, srcAddr net.Addr, dstAddr net.Addr) // function that returns a function for concurrent-safe proxy event subscriber
+	uuid              string                                                                 // UUID of the inbound and outbound connection pair
 
 	srcAddr net.Addr // the remote address of the source of the bytes (may either be the inbound or outbound connection)
 	dstAddr net.Addr // the remote address of the destination of the bytes (may either be the inbound or outbound connection)
 }
 
-func newHexWriter(a *App, uuid string, srcA net.Addr, dstA net.Addr) hexWriter {
+func newHexWriter(
+	relayedBytesEvent func() func(uuid string, b []byte, srcAddr net.Addr, dstAddr net.Addr),
+	uuid string,
+	srcA net.Addr,
+	dstA net.Addr,
+) hexWriter {
 	return hexWriter{
-		a:    a,
-		uuid: uuid,
+		relayedBytesEvent: relayedBytesEvent,
+		uuid:              uuid,
 
 		srcAddr: srcA,
 		dstAddr: dstA,
@@ -93,8 +98,8 @@ func newHexWriter(a *App, uuid string, srcA net.Addr, dstA net.Addr) hexWriter {
 }
 
 func (h hexWriter) Write(b []byte) (n int, err error) {
-	if h.a.subscriber != nil {
-		h.a.subscriber.RelayedBytes(h.uuid, b, h.srcAddr, h.dstAddr)
+	if h.relayedBytesEvent != nil && h.relayedBytesEvent() != nil {
+		h.relayedBytesEvent()(h.uuid, b, h.srcAddr, h.dstAddr)
 	}
 
 	return len(b), nil
