@@ -210,7 +210,8 @@ func (a *App) Run(ctx context.Context) {
 			a.h.listener().ValidatedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
 
 			// Connect to specified address (outbound connection).
-			outbConn, err := net.Dial("tcp", a.c.DstAddr)
+			d := net.Dialer{}
+			outbConn, err := d.DialContext(ctx, "tcp", a.c.DstAddr)
 
 			if outbConn != nil {
 				a.h.listener().AttemptedDial(outbConn.LocalAddr(), outbConn.RemoteAddr(), err)
