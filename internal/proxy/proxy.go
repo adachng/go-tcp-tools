@@ -75,6 +75,8 @@ type App struct {
 
 	rootWg     sync.WaitGroup // listener main loop and all paired connection instances
 	closeLOnce sync.Once      // close the listener only once
+
+	runMu sync.Mutex // prevents unintended concurrent usage on same instance
 }
 
 // Return an [App] with specified [Config] and [EventListener] interface (can be [nil]).
@@ -110,6 +112,9 @@ func (a *App) SetEventListener(s EventListener) {
 }
 
 func (a *App) Run(ctx context.Context) {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+
 	// Validate config.
 	if a.c.SrcIP == nil {
 		a.h.listener().GotError("", ErrInbIP)
