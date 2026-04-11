@@ -73,9 +73,6 @@ type App struct {
 	c Config
 	h *eventHandle
 
-	rootWg     sync.WaitGroup // listener main loop and all paired connection instances
-	closeLOnce sync.Once      // close the listener only once
-
 	runMu sync.Mutex // prevents unintended concurrent usage on same instance
 }
 
@@ -157,8 +154,17 @@ func (a *App) Run(ctx context.Context) {
 		return
 	}
 
-	// Remove code duplication of using [sync.Once.Go].
-	closeListener := func() {
+	// Derive a context with cancelFunc to be deferred in infinite loop.
+	ctx, cancelFunc := context.WithCancel(ctx)
+
+	// Wait group for all goroutines here.
+	var wg sync.WaitGroup
+
+	// Wait for context cancellation then close the listener.
+	wg.Go(func() {
+		<-ctx.Done()
+
+		// Close the listener.
 		err := l.Close()
 		if l != nil {
 			a.h.listener().ClosedListener(l.Addr(), err)
@@ -166,16 +172,12 @@ func (a *App) Run(ctx context.Context) {
 			// Not sure when listener is nil, it should be impossible.
 			a.h.listener().ClosedListener(nil, err)
 		}
-	}
-
-	// Defer closing of the listener.
-	defer a.closeLOnce.Do(closeListener)
+	})
 
 	// Infinite loop that ends upon context cancellation.
-	a.rootWg.Go(func() {
-		// Close listener in case of accept failure.
-		defer a.closeLOnce.Do(closeListener)
-
+	wg.Go(func() {
+		// Defer the cancellation of this context to the end of this infinite loop.
+		defer cancelFunc()
 		for {
 			// Blocking accept.
 			inbConn, err := l.Accept()
@@ -187,6 +189,7 @@ func (a *App) Run(ctx context.Context) {
 				a.h.listener().AttemptedAccept(nil, nil, err)
 			}
 
+			// If accept fails, return.
 			if err != nil {
 				return
 			}
@@ -243,16 +246,10 @@ func (a *App) Run(ctx context.Context) {
 			a.h.listener().GotConnPair(connUUID, inbConn.LocalAddr(), inbConn.RemoteAddr(), outbConn.LocalAddr(), outbConn.RemoteAddr())
 
 			// Start the connection pair loop concurrently.
-			a.rootWg.Go(func() { connPair.run(ctx) })
+			wg.Go(func() { connPair.run(ctx) })
 		}
 	})
 
-	// Wait for context cancellation.
-	<-ctx.Done()
-
-	// Close listener which triggers closing of all the connections associated with the listener, which should close the child goroutines.
-	a.closeLOnce.Do(closeListener)
-
-	// Wait for the listener and the inbound + outbound pair goroutines to complete.
-	a.rootWg.Wait()
+	// Wait for the listener and all the inbound + outbound pair goroutines to complete.
+	wg.Wait()
 }
