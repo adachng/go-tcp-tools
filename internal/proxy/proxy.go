@@ -189,9 +189,11 @@ func (a *App) Run(ctx context.Context) {
 				a.h.listener().AttemptedAccept(nil, nil, err)
 			}
 
-			// If accept fails, return.
-			if err != nil {
+			// If listener is closed (due to context), return. Assume transient error otherwise.
+			if errors.Is(err, net.ErrClosed) {
 				return
+			} else if err != nil {
+				continue
 			}
 
 			// Use this function to close both the inbound and outbound connections for less code duplication.
