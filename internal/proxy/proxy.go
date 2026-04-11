@@ -115,18 +115,19 @@ func (a *App) Run(ctx context.Context) {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
 
-	// Validate config.
-	if a.c.SrcIP == nil {
-		a.h.listener().GotError("", ErrInbIP)
-		return
-	}
-	if a.c.ListenPort <= 0 {
-		a.h.listener().GotError("", ErrInvalidPort)
-		return
-	}
-
-	// Validate a.c.DstAddr.
+	// All validations are here.
 	{
+		// Validate config.
+		if a.c.SrcIP == nil {
+			a.h.listener().GotError("", ErrInbIP)
+			return
+		}
+		if a.c.ListenPort <= 0 {
+			a.h.listener().GotError("", ErrInvalidPort)
+			return
+		}
+
+		// Validate a.c.DstAddr.
 		strs := strings.Split(a.c.DstAddr, ":")
 		if len(strs) != 2 {
 			a.h.listener().GotError("", ErrOutbAddr)
@@ -145,6 +146,7 @@ func (a *App) Run(ctx context.Context) {
 
 	l, err := net.Listen("tcp", ":"+strconv.FormatUint(lPort, 10))
 
+	// The listener is nil if error occurs. This prevents nil dereference.
 	if l != nil {
 		a.h.listener().AttemptedListen(l.Addr(), err)
 	} else {
@@ -161,6 +163,7 @@ func (a *App) Run(ctx context.Context) {
 		if l != nil {
 			a.h.listener().ClosedListener(l.Addr(), err)
 		} else {
+			// Not sure when listener is nil, it should be impossible.
 			a.h.listener().ClosedListener(nil, err)
 		}
 	}
@@ -168,6 +171,7 @@ func (a *App) Run(ctx context.Context) {
 	// Defer closing of the listener.
 	defer a.closeLOnce.Do(closeListener)
 
+	// Infinite loop that ends upon context cancellation.
 	a.rootWg.Go(func() {
 		// Close listener in case of accept failure.
 		defer a.closeLOnce.Do(closeListener)
@@ -176,7 +180,7 @@ func (a *App) Run(ctx context.Context) {
 			// Blocking accept.
 			inbConn, err := l.Accept()
 
-			// If err is not nil, inbConn is nil.
+			// If err is not nil, inbConn is nil. This prevents nil dereference.
 			if inbConn != nil {
 				a.h.listener().AttemptedAccept(inbConn.LocalAddr(), inbConn.RemoteAddr(), err)
 			} else {
@@ -187,7 +191,7 @@ func (a *App) Run(ctx context.Context) {
 				return
 			}
 
-			// Use this function to close both the inbound and outbound connections.
+			// Use this function to close both the inbound and outbound connections for less code duplication.
 			closeConn := func(uuid string, conn net.Conn) {
 				err := conn.Close()
 				if conn != nil {
@@ -200,7 +204,10 @@ func (a *App) Run(ctx context.Context) {
 			// Validate inbound connection's remote address.
 			if a.c.SrcIP.String() != "0.0.0.0" && // do not validate if "0.0.0.0"
 				strings.Split(inbConn.RemoteAddr().String(), ":")[0] != a.c.SrcIP.String() {
+
 				a.h.listener().FailedInbConn(inbConn.LocalAddr(), a.c.SrcIP.String())
+
+				// Close the inbound connection since address validation failed.
 				closeConn("", inbConn)
 				continue
 			}
@@ -211,13 +218,16 @@ func (a *App) Run(ctx context.Context) {
 			d := net.Dialer{}
 			outbConn, err := d.DialContext(ctx, "tcp", a.c.DstAddr)
 
+			// Prevent nil dereference in case of dial error.
 			if outbConn != nil {
 				a.h.listener().AttemptedDial(outbConn.LocalAddr(), outbConn.RemoteAddr(), err)
 			} else {
 				a.h.listener().AttemptedDial(nil, nil, err)
 			}
 
+			// Dial failed, no point continuing within this loop.
 			if err != nil {
+				// Close the inbound connection since the outbound connect attempt failed.
 				closeConn("", inbConn)
 				continue
 			}
@@ -237,6 +247,7 @@ func (a *App) Run(ctx context.Context) {
 			defer closeInbOnce.Do(func() { closeConn(connUUID, inbConn) })
 			defer closeOutbOnce.Do(func() { closeConn(connUUID, outbConn) })
 
+			// Start the connection pair loop concurrently.
 			a.rootWg.Go(func() { connPair.run(ctx) })
 		}
 	})
