@@ -34,10 +34,6 @@ type connPair struct {
 	closeConnFunc func(uuid string, conn net.Conn)
 
 	uuid string
-	wg   sync.WaitGroup
-
-	closeInbOnce  sync.Once
-	closeOutbOnce sync.Once
 
 	inbConn     net.Conn
 	inbToOutbHW *hexWriter
@@ -66,43 +62,39 @@ func newConnPair(
 	}
 }
 
-func (c *connPair) getSyncOnce() (*sync.Once, *sync.Once) {
-	return &c.closeInbOnce, &c.closeOutbOnce
-}
-
 func (c *connPair) run(ctx context.Context) {
-	// Defer closing the connections if any of the connections closes by remote peer or another goroutine.
-	defer c.closeInbOnce.Do(func() { c.closeConnFunc(c.uuid, c.inbConn) })
-	defer c.closeOutbOnce.Do(func() { c.closeConnFunc(c.uuid, c.outbConn) })
-
-	// One non-blocking select for context cancellation.
-	select {
-	case <-ctx.Done():
-		return
-	default:
-	}
-
 	// Note that [io.Copy] will never return error [io.EOF].
 	var wg sync.WaitGroup
 
+	// Derive a context with cancel function to call upon EOF in any of the endpoints.
+	ctx, cancelFunc := context.WithCancel(ctx)
+
+	// Close sockets upon context cancellation.
+	wg.Go(func() {
+		<-ctx.Done()
+		// Close all connections in this pair based on the derived context:
+		c.closeConnFunc(c.uuid, c.inbConn)
+		c.closeConnFunc(c.uuid, c.outbConn)
+	})
+
 	// Relay all bytes from inbound connection to outbound connection.
 	wg.Go(func() {
-		defer c.closeInbOnce.Do(func() { c.closeConnFunc(c.uuid, c.inbConn) })
-		defer c.closeOutbOnce.Do(func() { c.closeConnFunc(c.uuid, c.outbConn) })
-
 		teeR := io.TeeReader(c.inbConn, c.inbToOutbHW)
+
 		bytesWritten, err := io.Copy(c.outbConn, teeR)
 		c.h.listener().AttemptedIOCopy(c.uuid, bytesWritten, err, c.inbConn.LocalAddr(), c.inbConn.RemoteAddr(), c.outbConn.LocalAddr(), c.outbConn.RemoteAddr())
+
+		cancelFunc()
 	})
 
 	// Relay all bytes from outbound connection to inbound connection.
 	wg.Go(func() {
-		defer c.closeInbOnce.Do(func() { c.closeConnFunc(c.uuid, c.inbConn) })
-		defer c.closeOutbOnce.Do(func() { c.closeConnFunc(c.uuid, c.outbConn) })
-
 		teeR := io.TeeReader(c.outbConn, c.outbToInbHW)
+
 		bytesWritten, err := io.Copy(c.inbConn, teeR)
 		c.h.listener().AttemptedIOCopy(c.uuid, bytesWritten, err, c.outbConn.LocalAddr(), c.outbConn.RemoteAddr(), c.inbConn.LocalAddr(), c.inbConn.RemoteAddr())
+
+		cancelFunc()
 	})
 
 	// Wait for both byte-relaying goroutines to complete.

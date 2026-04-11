@@ -242,11 +242,6 @@ func (a *App) Run(ctx context.Context) {
 			connPair := newConnPair(a.h, closeConn, connUUID, inbConn, &inbToOutbHW, outbConn, &OutbToInbHW)
 			a.h.listener().GotConnPair(connUUID, inbConn.LocalAddr(), inbConn.RemoteAddr(), outbConn.LocalAddr(), outbConn.RemoteAddr())
 
-			// Defer the closing of inbound and outbound connections here to increase reactivity of shutting down proxy.
-			closeInbOnce, closeOutbOnce := connPair.getSyncOnce()
-			defer closeInbOnce.Do(func() { closeConn(connUUID, inbConn) })
-			defer closeOutbOnce.Do(func() { closeConn(connUUID, outbConn) })
-
 			// Start the connection pair loop concurrently.
 			a.rootWg.Go(func() { connPair.run(ctx) })
 		}
