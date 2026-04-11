@@ -76,7 +76,7 @@ func run(ctx context.Context, port uint64) {
 				return
 			} else if err != nil {
 				logx.Default().Error(err)
-				return
+				continue
 			}
 
 			logx.Default().Notice("Accepted connection from ", conn.RemoteAddr().String())

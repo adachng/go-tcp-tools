@@ -128,7 +128,7 @@ func (l *listener) GotConnPair(uuid string, inbLAddr net.Addr, inbRAddr net.Addr
 		prefix = "[" + uuid + "] "
 	}
 
-	logx.Default().Notice(prefix, "Proxy connection established:\n\t", inbRAddr.String(), " > ", inbLAddr.String(), " > ", outbLAddr.String(), " > ", outbRAddr.String())
+	logx.Default().Notice(prefix, "Proxy connection established:\n\t", inbRAddr.String(), " > ", inbLAddr.String(), " (local) > ", outbLAddr.String(), " (local) > ", outbRAddr.String())
 }
 
 func (l *listener) RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAddr net.Addr) {
