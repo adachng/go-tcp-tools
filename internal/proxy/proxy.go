@@ -173,13 +173,6 @@ func (a *App) Run(ctx context.Context) {
 		defer a.closeLOnce.Do(closeListener)
 
 		for {
-			// Non-blocking select for context cancellation.
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
 			// Blocking accept.
 			inbConn, err := l.Accept()
 
