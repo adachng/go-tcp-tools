@@ -238,11 +238,8 @@ func (a *App) Run(ctx context.Context) {
 			// Assign a UUID to this successful proxy connection.
 			connUUID := uuid.New().String()
 
-			inbToOutbHW := newHexWriter(a.h, connUUID, inbConn.RemoteAddr(), outbConn.RemoteAddr())
-			OutbToInbHW := newHexWriter(a.h, connUUID, outbConn.RemoteAddr(), inbConn.RemoteAddr())
-
 			// Instantiate connPair instances.
-			connPair := newConnPair(a.h, closeConn, connUUID, inbConn, &inbToOutbHW, outbConn, &OutbToInbHW)
+			connPair := newConnPair(a.h, closeConn, connUUID, inbConn, outbConn)
 			a.h.listener().GotConnPair(connUUID, inbConn.LocalAddr(), inbConn.RemoteAddr(), outbConn.LocalAddr(), outbConn.RemoteAddr())
 
 			// Start the connection pair loop concurrently.

@@ -29,17 +29,44 @@ import (
 	"sync"
 )
 
+// Implements [io.Writer] for [io.TeeReader] to log all bytes relayed in hex.
+type hexWriter struct {
+	evH  *eventHandle
+	uuid string // UUID of the inbound and outbound connection pair
+
+	srcAddr net.Addr // the remote address of the source of the bytes (may either be the inbound or outbound connection)
+	dstAddr net.Addr // the remote address of the destination of the bytes (may either be the inbound or outbound connection)
+}
+
+func newHexWriter(
+	evH *eventHandle,
+	uuid string,
+	srcA net.Addr,
+	dstA net.Addr,
+) hexWriter {
+	return hexWriter{
+		evH:  evH,
+		uuid: uuid,
+
+		srcAddr: srcA,
+		dstAddr: dstA,
+	}
+}
+
+func (h hexWriter) Write(b []byte) (n int, err error) {
+	h.evH.listener().RelayedBytes(h.uuid, b, h.srcAddr, h.dstAddr)
+
+	return len(b), nil
+}
+
 type connPair struct {
 	h             *eventHandle
 	closeConnFunc func(uuid string, conn net.Conn)
 
 	uuid string
 
-	inbConn     net.Conn
-	inbToOutbHW *hexWriter
-
-	outbConn    net.Conn
-	outbToInbHW *hexWriter
+	inbConn  net.Conn
+	outbConn net.Conn
 }
 
 func newConnPair(
@@ -47,18 +74,14 @@ func newConnPair(
 	closeConnFunc func(uuid string, conn net.Conn),
 	uuid string,
 	inbConn net.Conn,
-	inbToOutbHW *hexWriter,
 	outbConn net.Conn,
-	outbToInbHW *hexWriter,
 ) *connPair {
 	return &connPair{
 		h:             h,
 		closeConnFunc: closeConnFunc,
 		uuid:          uuid,
 		inbConn:       inbConn,
-		inbToOutbHW:   inbToOutbHW,
 		outbConn:      outbConn,
-		outbToInbHW:   outbToInbHW,
 	}
 }
 
@@ -79,7 +102,8 @@ func (c *connPair) run(ctx context.Context) {
 
 	// Relay all bytes from inbound connection to outbound connection.
 	wg.Go(func() {
-		teeR := io.TeeReader(c.inbConn, c.inbToOutbHW)
+		inbToOutbHW := newHexWriter(c.h, c.uuid, c.inbConn.RemoteAddr(), c.outbConn.RemoteAddr())
+		teeR := io.TeeReader(c.inbConn, inbToOutbHW)
 
 		bytesWritten, err := io.Copy(c.outbConn, teeR)
 		c.h.listener().AttemptedIOCopy(c.uuid, bytesWritten, err, c.inbConn.LocalAddr(), c.inbConn.RemoteAddr(), c.outbConn.LocalAddr(), c.outbConn.RemoteAddr())
@@ -89,7 +113,8 @@ func (c *connPair) run(ctx context.Context) {
 
 	// Relay all bytes from outbound connection to inbound connection.
 	wg.Go(func() {
-		teeR := io.TeeReader(c.outbConn, c.outbToInbHW)
+		outbToInbHW := newHexWriter(c.h, c.uuid, c.outbConn.RemoteAddr(), c.inbConn.RemoteAddr())
+		teeR := io.TeeReader(c.outbConn, outbToInbHW)
 
 		bytesWritten, err := io.Copy(c.inbConn, teeR)
 		c.h.listener().AttemptedIOCopy(c.uuid, bytesWritten, err, c.outbConn.LocalAddr(), c.outbConn.RemoteAddr(), c.inbConn.LocalAddr(), c.inbConn.RemoteAddr())

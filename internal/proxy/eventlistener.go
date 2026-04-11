@@ -110,33 +110,3 @@ func (e *eventHandle) listener() EventListener {
 func (e *eventHandle) setListener(evList EventListener) {
 	e.evList.Store(evList)
 }
-
-// Implements [io.Writer] for [io.TeeReader] to log all bytes relayed in hex.
-type hexWriter struct {
-	evH  *eventHandle
-	uuid string // UUID of the inbound and outbound connection pair
-
-	srcAddr net.Addr // the remote address of the source of the bytes (may either be the inbound or outbound connection)
-	dstAddr net.Addr // the remote address of the destination of the bytes (may either be the inbound or outbound connection)
-}
-
-func newHexWriter(
-	evH *eventHandle,
-	uuid string,
-	srcA net.Addr,
-	dstA net.Addr,
-) hexWriter {
-	return hexWriter{
-		evH:  evH,
-		uuid: uuid,
-
-		srcAddr: srcA,
-		dstAddr: dstA,
-	}
-}
-
-func (h hexWriter) Write(b []byte) (n int, err error) {
-	h.evH.listener().RelayedBytes(h.uuid, b, h.srcAddr, h.dstAddr)
-
-	return len(b), nil
-}
