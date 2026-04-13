@@ -39,10 +39,10 @@ import (
 	"github.com/adachng/go-tcp-tools/internal/proxy"
 )
 
-type listener struct {
+type evListener struct {
 }
 
-func (l *listener) GotError(uuid string, err error) {
+func (e *evListener) GotError(uuid string, err error) {
 	if uuid == "" {
 		logx.Default().Error("Error:\n\t", err)
 	} else {
@@ -50,20 +50,28 @@ func (l *listener) GotError(uuid string, err error) {
 	}
 }
 
-func (l *listener) AttemptedListen(lAddr net.Addr, err error) {
+func (e *evListener) AttemptedListen(lAddr net.Addr, err error) {
 	lAddrStr := ""
 	if lAddr != nil {
 		lAddrStr = "at " + lAddr.String() + " "
 	}
 
 	if err != nil {
-		logx.Default().Error("Proxy listener ", lAddrStr, "failed:\n\t", err)
+		logx.Default().Error(
+			"Proxy listener ",
+			lAddrStr,
+			"failed:\n\t",
+			err,
+		)
 	} else {
-		logx.Default().Notice("Proxy listener successfully established at ", lAddr.String())
+		logx.Default().Notice(
+			"Proxy listener successfully established at ",
+			lAddr.String(),
+		)
 	}
 }
 
-func (l *listener) AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
+func (e *evListener) AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
 	rAddrStr := ""
 	if rAddr != nil {
 		rAddrStr = "from " + rAddr.String() + " "
@@ -71,10 +79,19 @@ func (l *listener) AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
 
 	if errors.Is(err, net.ErrClosed) {
 		// Benign case of listener closed from somewhere else.
-		logx.Default().Info("Attempt to accept inbound connection ", rAddrStr, "is cancelled")
+		logx.Default().Info(
+			"Attempt to accept inbound connection ",
+			rAddrStr,
+			"is cancelled",
+		)
 	} else if err != nil {
 		// Actual unexpected error.
-		logx.Default().Error("Attempt to accept inbound connection from ", rAddrStr, "failed:\n\t", err)
+		logx.Default().Error(
+			"Attempt to accept inbound connection from ",
+			rAddrStr,
+			"failed:\n\t",
+			err,
+		)
 	} else {
 		suffix := ""
 		if lAddr != nil {
@@ -86,25 +103,37 @@ func (l *listener) AttemptedAccept(lAddr net.Addr, rAddr net.Addr, err error) {
 	}
 }
 
-func (l *listener) FailedInbConn(rAddr net.Addr, match string) {
+func (e *evListener) FailedInbConn(rAddr net.Addr, match string) {
 	rAddrStr := ""
 	if rAddr != nil {
 		rAddrStr = "from " + rAddr.String() + " "
 	}
 
-	logx.Default().Notice("Inbound connection ", rAddrStr, "rejected (does not match ", match, ")")
+	logx.Default().Notice(
+		"Inbound connection ",
+		rAddrStr,
+		"rejected (does not match ",
+		match,
+		")",
+	)
 }
 
-func (l *listener) ValidatedInbConn(rAddr net.Addr, match string) {
+func (e *evListener) ValidatedInbConn(rAddr net.Addr, match string) {
 	rAddrStr := ""
 	if rAddr != nil {
 		rAddrStr = "from " + rAddr.String() + " "
 	}
 
-	logx.Default().Info("Inbound connection ", rAddrStr, "validated against ", match, " successfully")
+	logx.Default().Info(
+		"Inbound connection ",
+		rAddrStr,
+		"validated against ",
+		match,
+		" successfully",
+	)
 }
 
-func (l *listener) AttemptedDial(lAddr net.Addr, rAddr net.Addr, err error) {
+func (e *evListener) AttemptedDial(lAddr net.Addr, rAddr net.Addr, err error) {
 	lAddrStr := ""
 	if lAddr != nil {
 		lAddrStr = "from local address " + lAddr.String() + " "
@@ -116,22 +145,42 @@ func (l *listener) AttemptedDial(lAddr net.Addr, rAddr net.Addr, err error) {
 	}
 
 	if err != nil {
-		logx.Default().Error("Outbound connection attempt ", lAddrStr, rAddrStr, "failed:\n\t", err)
+		logx.Default().Error(
+			"Outbound connection attempt ",
+			lAddrStr,
+			rAddrStr,
+			"failed:\n\t",
+			err,
+		)
 	} else {
-		logx.Default().Info("Successfully connected outbound ", lAddrStr, rAddrStr)
+		logx.Default().Info(
+			"Successfully connected outbound ",
+			lAddrStr,
+			rAddrStr,
+		)
 	}
 }
 
-func (l *listener) GotConnPair(uuid string, inbLAddr net.Addr, inbRAddr net.Addr, outbLAddr net.Addr, outbRAddr net.Addr) {
+func (e *evListener) GotConnPair(uuid string, inbLAddr net.Addr, inbRAddr net.Addr, outbLAddr net.Addr, outbRAddr net.Addr) {
 	prefix := ""
 	if uuid != "" {
 		prefix = "[" + uuid + "] "
 	}
 
-	logx.Default().Notice(prefix, "Proxy connection established:\n\t", inbRAddr.String(), " > ", inbLAddr.String(), " (local) > ", outbLAddr.String(), " (local) > ", outbRAddr.String())
+	logx.Default().Notice(
+		prefix,
+		"Proxy connection established:\n\t",
+		inbRAddr.String(),
+		" > ",
+		inbLAddr.String(),
+		" (local) > ",
+		outbLAddr.String(),
+		" (local) > ",
+		outbRAddr.String(),
+	)
 }
 
-func (l *listener) RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAddr net.Addr) {
+func (e *evListener) RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAddr net.Addr) {
 	prefix := ""
 	if uuid != "" {
 		prefix = "[" + uuid + "] "
@@ -139,10 +188,20 @@ func (l *listener) RelayedBytes(uuid string, b []byte, srcRAddr net.Addr, dstRAd
 
 	hexStr := strings.ToUpper(hex.EncodeToString(b))
 
-	logx.Default().Info(prefix, "Relayed ", len(b), " bytes from ", srcRAddr, " to ", dstRAddr, ":\n\t", hexStr)
+	logx.Default().Info(
+		prefix,
+		"Relayed ",
+		len(b),
+		" bytes from ",
+		srcRAddr,
+		" to ",
+		dstRAddr,
+		":\n\t",
+		hexStr,
+	)
 }
 
-func (l *listener) AttemptedIOCopy(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
+func (e *evListener) AttemptedIOCopy(uuid string, bytesWritten int64, err error, srcLAddr net.Addr, srcRAddr net.Addr, dstLAddr net.Addr, dstRAddr net.Addr) {
 	prefix := ""
 	if uuid != "" {
 		prefix = "[" + uuid + "] "
@@ -151,38 +210,80 @@ func (l *listener) AttemptedIOCopy(uuid string, bytesWritten int64, err error, s
 	prefix += "IO copy from " + srcRAddr.String() + " to " + dstRAddr.String() + " with " + strconv.FormatInt(bytesWritten, 10) + " bytes written:\n\t"
 
 	if errors.Is(err, net.ErrClosed) {
-		logx.Default().Info(prefix, "IO copy interrupted by connection closing")
+		logx.Default().Info(
+			prefix,
+			"IO copy interrupted by connection closing",
+		)
 	} else if errors.Is(err, io.EOF) {
-		logx.Default().Panic(prefix, "io.Copy returned EOF error") // never happens according to official docs
+		logx.Default().Panic(
+			prefix,
+			"io.Copy returned EOF error",
+		) // never happens according to official docs
 	} else if err != nil {
-		logx.Default().Notice(prefix, "Success (EOF encountered)")
+		logx.Default().Notice(
+			prefix,
+			"Success (EOF encountered)",
+		)
 	}
 }
 
-func (l *listener) ClosedConn(uuid string, lAddr net.Addr, rAddr net.Addr, err error) {
+func (e *evListener) ClosedConn(uuid string, lAddr net.Addr, rAddr net.Addr, err error) {
 	prefix := ""
 	if uuid != "" {
 		prefix = "[" + uuid + "] "
 	}
 
 	if errors.Is(err, net.ErrClosed) {
-		logx.Default().Panic(prefix, "Connection with ", rAddr.String(), " is repeatedly closed")
+		logx.Default().Panic(
+			prefix,
+			"Connection with ",
+			rAddr.String(),
+			" is repeatedly closed",
+		)
 	} else if errors.Is(err, io.EOF) {
-		logx.Default().Info(prefix, "Connection with ", rAddr.String(), " is closed somewhere else")
+		logx.Default().Info(
+			prefix,
+			"Connection with ",
+			rAddr.String(),
+			" is closed somewhere else",
+		)
 	} else if err != nil {
-		logx.Default().Error(prefix, "Connection with ", rAddr.String(), " failed to close:\n\t", err)
+		logx.Default().Error(
+			prefix,
+			"Connection with ",
+			rAddr.String(),
+			" failed to close:\n\t", err,
+		)
 	} else {
-		logx.Default().Notice(prefix, "Connection with ", rAddr.String(), " is closed successfully")
+		logx.Default().Notice(
+			prefix,
+			"Connection with ",
+			rAddr.String(),
+			" is closed successfully",
+		)
 	}
 }
 
-func (l *listener) ClosedListener(lAddr net.Addr, err error) {
+func (e *evListener) ClosedListener(lAddr net.Addr, err error) {
 	if errors.Is(err, net.ErrClosed) {
-		logx.Default().Panic("Listener at ", lAddr.String(), " is repeatedly closed")
+		logx.Default().Panic(
+			"Listener at ",
+			lAddr.String(),
+			" is repeatedly closed",
+		)
 	} else if err != nil {
-		logx.Default().Error("Listener at ", lAddr.String(), " failed to close:\n\t", err)
+		logx.Default().Error(
+			"Listener at ",
+			lAddr.String(),
+			" failed to close:\n\t",
+			err,
+		)
 	} else {
-		logx.Default().Notice("Listener at ", lAddr.String(), " is closed successfully")
+		logx.Default().Notice(
+			"Listener at ",
+			lAddr.String(),
+			" is closed successfully",
+		)
 	}
 }
 
@@ -191,7 +292,9 @@ func printUsage(err error) {
 		fmt.Println("Error:\n\t", err)
 	}
 
-	fmt.Println("Usage:\n\t", os.Args[0], " <PORT> <INBOUND_IPV4> <OUTBOUND_IPV4_WITH_PORT>")
+	fmt.Println("Usage:\n\t",
+		os.Args[0], " <PORT> <INBOUND_IPV4> <OUTBOUND_IPV4_WITH_PORT>",
+	)
 }
 
 func main() {
@@ -219,7 +322,7 @@ func main() {
 		DstAddr: args[3],
 	}
 
-	l := listener{}
+	l := evListener{}
 
 	app, err := proxy.New(c, &l)
 	if err != nil {
