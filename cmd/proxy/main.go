@@ -293,13 +293,19 @@ func printUsage(err error) {
 	}
 
 	fmt.Println("Usage:\n\t",
-		os.Args[0], " <PORT> <INBOUND_IPV4> <OUTBOUND_IPV4_WITH_PORT>",
+		os.Args[0], " <PORT> <INBOUND_IPV4> <OUTBOUND_IPV4_WITH_PORT> [LOG_FILE_PREFIX]\n",
+		"Example:\n\t",
+		"proxy 8080 0.0.0.0 127.0.0.1:8081 ./proxy.log",
 	)
 }
 
 func main() {
 	if len(os.Args) < 4 {
 		printUsage(errors.New("main: not enough arguments"))
+		return
+	}
+	if len(os.Args) > 5 {
+		printUsage(errors.New("main: too many arguments"))
 		return
 	}
 
